@@ -75,7 +75,7 @@ class FieldCheckServiceTest {
         when(teacherCourseMapper.selectByTeacher(SEMESTER_ID, TEACHER_ID)).thenReturn(List.of(relation));
         Textbook book = new Textbook();
         book.setId(TEXTBOOK_ID);
-        book.setIsbn("978-7-04-056616-6");
+        book.setIsbn("978-0-306-40615-7");
         book.setStatus(1);
         when(textbookMapper.selectList(any(Wrapper.class))).thenReturn(List.of(book));
     }
@@ -197,7 +197,7 @@ class FieldCheckServiceTest {
         void checkOrderItems_activeBookWithInvalidIsbn_returnsIsbnFormatIssue() {
             Textbook badIsbn = new Textbook();
             badIsbn.setId(TEXTBOOK_ID);
-            badIsbn.setIsbn("978-7-04-056616-0");
+            badIsbn.setIsbn("978-0-306-40615-8");
             badIsbn.setStatus(1);
             when(textbookMapper.selectList(any(Wrapper.class))).thenReturn(List.of(badIsbn));
             assertThat(rulesOf(check(List.of(validItem()))))

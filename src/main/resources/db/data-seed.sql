@@ -84,16 +84,27 @@ INSERT INTO sys_user (user_no, name, password_hash, phone, college_id, class_id,
 
 -- ============ 用户-角色绑定 ============
 INSERT INTO sys_user_role (user_id, role_id)
-SELECT u.id, r.id FROM sys_user u JOIN sys_role r ON r.role_code IN
-  ('ADMIN','SECRETARY','TEACHER','STUDENT','SUPPLIER')
-WHERE (u.user_no, r.role_code) IN (
-  ('900001','ADMIN'), ('900002','ADMIN'), ('900003','ADMIN'),
-  ('800101','SECRETARY'), ('800102','SECRETARY'), ('800103','SECRETARY'),
-  ('700101','TEACHER'), ('700102','TEACHER'), ('700103','TEACHER'),
-  ('700103','SECRETARY'),
-  ('700201','TEACHER'), ('700202','TEACHER'),
-  ('20230101','STUDENT'), ('20230102','STUDENT'), ('20230103','STUDENT'), ('20230201','STUDENT'),
-  ('600001','SUPPLIER'), ('600002','SUPPLIER'));
+SELECT u.id, r.id
+FROM (SELECT '900001' AS user_no, 'ADMIN' AS role_code
+      UNION ALL SELECT '900002', 'ADMIN'
+      UNION ALL SELECT '900003', 'ADMIN'
+      UNION ALL SELECT '800101', 'SECRETARY'
+      UNION ALL SELECT '800102', 'SECRETARY'
+      UNION ALL SELECT '800103', 'SECRETARY'
+      UNION ALL SELECT '700101', 'TEACHER'
+      UNION ALL SELECT '700102', 'TEACHER'
+      UNION ALL SELECT '700103', 'TEACHER'
+      UNION ALL SELECT '700103', 'SECRETARY'
+      UNION ALL SELECT '700201', 'TEACHER'
+      UNION ALL SELECT '700202', 'TEACHER'
+      UNION ALL SELECT '20230101', 'STUDENT'
+      UNION ALL SELECT '20230102', 'STUDENT'
+      UNION ALL SELECT '20230103', 'STUDENT'
+      UNION ALL SELECT '20230201', 'STUDENT'
+      UNION ALL SELECT '600001', 'SUPPLIER'
+      UNION ALL SELECT '600002', 'SUPPLIER') pairs
+JOIN sys_user u ON u.user_no = pairs.user_no
+JOIN sys_role r ON r.role_code = pairs.role_code;
 
 -- ============ 按学期归属（active 学期，真源 W6） ============
 INSERT INTO user_semester_profile (user_id, semester_id, college_id, class_id, status)
