@@ -240,7 +240,7 @@ class FieldCheckServiceTest {
             assertThat(FieldCheckService.isValidIsbn("978-0-306-40615-7")).isTrue();
             assertThat(FieldCheckService.isValidIsbn("080442957X")).isTrue();
             assertThat(FieldCheckService.isValidIsbn("080442957x")).isTrue();
-            assertThat(FieldCheckService.isValidIsbn("978 7 04 056616 6")).isTrue();
+            assertThat(FieldCheckService.isValidIsbn("978 0 306 40615 7")).isTrue();
         }
 
         @Test

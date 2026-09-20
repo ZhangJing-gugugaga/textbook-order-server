@@ -76,7 +76,7 @@ class ConfigWhitelistTest {
             assertThatThrownBy(() -> service.update(Map.of("not.a.key", "1")))
                     .isInstanceOf(BizException.class)
                     .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.CONFIG_VALUE_INVALID));
-            verify(configMapper, never()).insert(any());
+            verify(configMapper, never()).insert(any(SystemConfig.class));
         }
 
         @Test
@@ -138,7 +138,7 @@ class ConfigWhitelistTest {
 
             service.update(Map.of("notice.round_limit", "8"));
 
-            verify(configMapper, never()).insert(any());
+            verify(configMapper, never()).insert(any(SystemConfig.class));
             verify(configMapper).update(any(SystemConfig.class), any());
         }
     }

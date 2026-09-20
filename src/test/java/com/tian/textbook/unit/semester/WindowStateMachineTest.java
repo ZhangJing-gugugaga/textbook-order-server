@@ -1,5 +1,7 @@
 package com.tian.textbook.unit.semester;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.notify.WindowChangeNotifier;
@@ -13,6 +15,7 @@ import com.tian.textbook.semester.mapper.SemesterMapper;
 import com.tian.textbook.system.audit.AuditService;
 import com.tian.textbook.system.mapper.AuditLogMapper;
 import com.tian.textbook.system.mapper.SysUserMapper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -64,6 +67,9 @@ class WindowStateMachineTest {
 
     @BeforeEach
     void setUp() {
+        // LambdaUpdateWrapper.set() 需 TableInfo 缓存（Spring 上下文中由 MP 初始化；单测手工补）
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+                Semester.class);
         service = new SemesterService(semesterMapper, userMapper, auditService, auditLogMapper,
                 windowChangeNotifier, activeSemesterService);
     }
@@ -105,7 +111,7 @@ class WindowStateMachineTest {
                     LocalDateTime.now().plusDays(2), LocalDateTime.now().plusDays(1))))
                     .isInstanceOf(BizException.class)
                     .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.PARAM_INVALID));
-            verify(semesterMapper, never()).insert(any());
+            verify(semesterMapper, never()).insert(any(Semester.class));
         }
 
         @Test
