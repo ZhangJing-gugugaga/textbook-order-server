@@ -15,7 +15,7 @@ import java.util.Map;
  * 导入批次（import_batch）：上传 → running → done/failed；进度可轮询，错误明细可下载。
  */
 @Data
-@TableName("import_batch")
+@TableName(value = "import_batch", autoResultMap = true)
 public class ImportBatch {
 
     @TableId(type = IdType.AUTO)

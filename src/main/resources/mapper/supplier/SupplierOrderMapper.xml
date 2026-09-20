@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.supplier.mapper.SupplierOrderMapper">
+
+    <!--
+      供货商只读清单（SPEC §11.5 · PRD 模块 8：字段白名单 = 书名/ISBN/数量/教师姓名/学院）。
+      仅 reviewed（超管审核通过）的教师征订单；不出现学生选购数据（W18）。
+      学院归属经 user_semester_profile（真源，W6）。
+    -->
+    <select id="selectReviewedRows" resultType="com.tian.textbook.supplier.dto.SupplierOrderRow">
+        SELECT c.id AS collegeId, c.name AS collegeName,
+               u.name AS teacherName, t.isbn AS isbn, t.title AS title, i.quantity AS quantity
+        FROM order_form f
+        JOIN order_form_item i ON i.form_id = f.id AND i.deleted = 0
+        JOIN textbook t ON t.id = i.textbook_id AND t.deleted = 0
+        JOIN sys_user u ON u.id = f.teacher_id AND u.deleted = 0
+        LEFT JOIN user_semester_profile p
+               ON p.user_id = u.id AND p.semester_id = f.semester_id AND p.deleted = 0
+        LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
+        WHERE f.status = 'reviewed' AND f.semester_id = #{semesterId} AND f.deleted = 0
+        ORDER BY c.id, u.name, t.isbn
+    </select>
+
+    <select id="countReviewed" resultType="long">
+        SELECT COUNT(1)
+        FROM order_form f
+        JOIN order_form_item i ON i.form_id = f.id AND i.deleted = 0
+        WHERE f.status = 'reviewed' AND f.semester_id = #{semesterId} AND f.deleted = 0
+    </select>
+</mapper>

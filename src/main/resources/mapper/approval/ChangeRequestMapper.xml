@@ -3,14 +3,36 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.tian.textbook.approval.mapper.ChangeRequestMapper">
 
-    <select id="selectPageByFilter" resultType="com.tian.textbook.approval.dto.ChangeRequestListItem">
+    <!-- payload_json（JSON 列）需显式 JacksonTypeHandler：MyBatis 无 Map 类型默认处理器，
+         自动映射会静默丢弃该列 -->
+    <resultMap id="changeRequestListItemMap" type="com.tian.textbook.approval.dto.ChangeRequestListItem">
+        <id property="id" column="id"/>
+        <result property="semesterId" column="semester_id"/>
+        <result property="type" column="type"/>
+        <result property="targetUserId" column="target_user_id"/>
+        <result property="targetUserName" column="targetUserName"/>
+        <result property="targetUserNo" column="targetUserNo"/>
+        <result property="currentCollegeName" column="currentCollegeName"/>
+        <result property="currentClassName" column="currentClassName"/>
+        <result property="payloadJson" column="payload_json" javaType="java.util.Map"
+                typeHandler="com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler"/>
+        <result property="status" column="status"/>
+        <result property="batchNo" column="batch_no"/>
+        <result property="applicantId" column="applicant_id"/>
+        <result property="applicantName" column="applicantName"/>
+        <result property="reason" column="reason"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="reviewAt" column="review_at"/>
+    </resultMap>
+
+    <select id="selectPageByFilter" resultMap="changeRequestListItemMap">
         SELECT r.id, r.semester_id, r.type, r.target_user_id, r.payload_json, r.status,
                r.batch_no, r.applicant_id, r.reason, r.created_at, r.review_at,
                t.name AS targetUserName, t.user_no AS targetUserNo,
                tc.name AS currentCollegeName, tcl.name AS currentClassName,
                a.name AS applicantName
         FROM change_request r
-        JOIN sys_user t ON t.id = r.target_user_id AND t.deleted = 0
+        LEFT JOIN sys_user t ON t.id = r.target_user_id AND t.deleted = 0
         LEFT JOIN sys_user a ON a.id = r.applicant_id AND a.deleted = 0
         LEFT JOIN college tc ON tc.id = t.college_id AND tc.deleted = 0
         LEFT JOIN school_class tcl ON tcl.id = t.class_id AND tcl.deleted = 0

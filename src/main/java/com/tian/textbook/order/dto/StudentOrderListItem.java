@@ -15,6 +15,8 @@ public class StudentOrderListItem {
 
     private Long semesterId;
 
+    private String semesterName;
+
     private Long studentId;
 
     private String studentName;

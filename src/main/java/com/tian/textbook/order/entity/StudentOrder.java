@@ -14,7 +14,7 @@ import java.util.Map;
  * 学生选购单（student_order，一人一学期一单；重提 = 整单覆盖）。
  */
 @Data
-@TableName("student_order")
+@TableName(value = "student_order", autoResultMap = true)
 public class StudentOrder {
 
     @TableId(type = IdType.AUTO)

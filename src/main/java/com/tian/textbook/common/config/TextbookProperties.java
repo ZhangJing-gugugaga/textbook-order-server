@@ -77,5 +77,7 @@ public class TextbookProperties {
     public static class Miniapp {
         private String appid = "";
         private String secret = "";
+        /** 订阅消息模板 id（环境变量 WX_SUBSCRIBE_TEMPLATE_ID；未申请时重发记 unauthorized，W5/R10） */
+        private String subscribeTemplateId = "";
     }
 }

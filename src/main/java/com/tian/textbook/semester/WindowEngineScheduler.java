@@ -3,6 +3,7 @@ package com.tian.textbook.semester;
 import com.tian.textbook.semester.entity.Semester;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -12,9 +13,12 @@ import java.time.ZoneId;
 /**
  * 窗口引擎定时扫描（SPEC §6：每分钟，ZoneId=Asia/Shanghai，仅扫 active 学期；
  * 幂等：状态已变则跳过；auto_open/auto_close=false 时到点不改状态）。
+ *
+ * <p>test profile 下关闭（测试直接调 SemesterService.applyAutoTransition，保证确定性）。</p>
  */
 @Slf4j
 @Component
+@Profile("!test")
 @RequiredArgsConstructor
 public class WindowEngineScheduler {
 

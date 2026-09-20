@@ -18,7 +18,7 @@ import java.util.List;
  * reviewed / rejected（rejected 可补正重提，关窗后 7 天内仍可补正，W4）。</p>
  */
 @Data
-@TableName("order_form")
+@TableName(value = "order_form", autoResultMap = true)
 public class OrderForm {
 
     @TableId(type = IdType.AUTO)

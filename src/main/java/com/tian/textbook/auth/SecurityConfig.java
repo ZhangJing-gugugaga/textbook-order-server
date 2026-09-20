@@ -33,6 +33,16 @@ public class SecurityConfig {
     }
 
     @Bean
+    public JwtAuthFilter jwtAuthFilter(AuthUserService authUserService, JwtService jwtService) {
+        return new JwtAuthFilter(authUserService, jwtService);
+    }
+
+    @Bean
+    public MustChangePasswordFilter mustChangePasswordFilter() {
+        return new MustChangePasswordFilter();
+    }
+
+    @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthFilter jwtAuthFilter,
                                                    MustChangePasswordFilter mustChangePasswordFilter) throws Exception {

@@ -1,0 +1,2 @@
+org.springframework.context.ApplicationListener=\
+com.tian.textbook.support.H2SchemaInitializer$ReadyListener

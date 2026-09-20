@@ -15,7 +15,7 @@ import java.util.Map;
  * 一次性下载 token 单次有效、默认 10 分钟过期，文件保留 24 小时。
  */
 @Data
-@TableName("export_task")
+@TableName(value = "export_task", autoResultMap = true)
 public class ExportTask {
 
     @TableId(type = IdType.AUTO)

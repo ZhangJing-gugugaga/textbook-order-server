@@ -79,6 +79,7 @@ textbook:
     miniapp:
       appid: ${WX_MINIAPP_APPID:}
       secret: ${WX_MINIAPP_SECRET:}
+      subscribe-template-id: ${WX_SUBSCRIBE_TEMPLATE_ID:}
 
 logging:
   level:

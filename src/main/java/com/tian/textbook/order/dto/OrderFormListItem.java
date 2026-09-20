@@ -14,6 +14,8 @@ public class OrderFormListItem {
 
     private Long semesterId;
 
+    private String semesterName;
+
     private Long teacherId;
 
     private String teacherName;

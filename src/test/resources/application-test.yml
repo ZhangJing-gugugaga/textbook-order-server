@@ -1,0 +1,55 @@
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  datasource:
+    url: jdbc:h2:mem:textbook;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;NON_KEYWORDS=YEAR,STATUS,VALUE,ROUND
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      maximum-pool-size: 10
+  sql:
+    init:
+      mode: never
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+
+textbook:
+  jwt:
+    secret: test-secret-32-bytes-length-ok-1234567890
+    access-minutes: 15
+    refresh-days: 7
+  security:
+    login:
+      max-fail: 5
+      lock-minutes: 15
+      rate-per-minute: 1000
+  import:
+    max-file-mb: 10
+    pool:
+      core-size: 2
+      max-size: 4
+      queue-capacity: 50
+  export:
+    tmp-dir: ./data/test-export
+    sync-row-threshold: 5000
+    download-token-minutes: 10
+    retention-hours: 24
+  weixin:
+    miniapp:
+      appid: ""
+      secret: ""
+
+logging:
+  level:
+    com.tian.textbook: WARN
+    com.baomidou.mybatisplus: WARN

@@ -14,7 +14,7 @@ import java.util.Map;
  * 审计日志（audit_log，只写不改；不含密码/token）。
  */
 @Data
-@TableName("audit_log")
+@TableName(value = "audit_log", autoResultMap = true)
 public class AuditLog {
 
     @TableId(type = IdType.AUTO)

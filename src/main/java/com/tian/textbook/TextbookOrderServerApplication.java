@@ -1,7 +1,9 @@
 package com.tian.textbook;
 
+import com.tian.textbook.common.config.TextbookProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
@@ -14,6 +16,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * 时区固定 Asia/Shanghai（SPEC §6）。</p>
  */
 @EnableScheduling
+@EnableConfigurationProperties(TextbookProperties.class)
 @SpringBootApplication
 public class TextbookOrderServerApplication {
 

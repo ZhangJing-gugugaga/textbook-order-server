@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.textbook.mapper.TeacherCourseQueryMapper">
+
+    <!--
+      任课关系列表：teacher_course + course + sys_user + school_class。
+      sys_user 统一别名 u：teacher_course 无 name 列，联表后各表 name 列一律 AS 别名
+      （course_name/teacher_name/class_name），避免与 teacher 维度字段混淆。
+    -->
+    <select id="selectWithNames" resultType="com.tian.textbook.textbook.dto.TeacherCourseListItem">
+        SELECT tc.id, tc.semester_id, tc.teacher_id, tc.course_id, tc.class_id,
+               c.name  AS course_name,
+               u.name  AS teacher_name,
+               sc.name AS class_name
+        FROM teacher_course tc
+        JOIN course c ON c.id = tc.course_id AND c.deleted = 0
+        LEFT JOIN sys_user u ON u.id = tc.teacher_id AND u.deleted = 0
+        LEFT JOIN school_class sc ON sc.id = tc.class_id AND sc.deleted = 0
+        WHERE tc.deleted = 0
+          AND tc.semester_id = #{semesterId}
+        <if test="teacherId != null"> AND tc.teacher_id = #{teacherId}</if>
+        <if test="classId != null"> AND tc.class_id = #{classId}</if>
+        ORDER BY tc.id DESC
+    </select>
+</mapper>

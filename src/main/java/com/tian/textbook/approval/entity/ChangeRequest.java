@@ -19,7 +19,7 @@ import java.util.Map;
  * active 学期归属，W15 立即生效）/ rejected（理由必填）。</p>
  */
 @Data
-@TableName("change_request")
+@TableName(value = "change_request", autoResultMap = true)
 public class ChangeRequest {
 
     @TableId(type = IdType.AUTO)
