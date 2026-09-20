@@ -41,6 +41,13 @@ public class AdminSemesterController {
         return ApiResponse.ok(semesterService.create(request));
     }
 
+    /** 学期详情 */
+    @GetMapping("/{id}")
+    @PreAuthorize("hasAuthority('semester:semester:manage')")
+    public ApiResponse<Semester> get(@PathVariable Long id) {
+        return ApiResponse.ok(semesterService.get(id));
+    }
+
     /** 编辑基本信息 */
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('semester:semester:manage')")

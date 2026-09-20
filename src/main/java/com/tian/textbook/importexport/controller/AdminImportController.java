@@ -1,6 +1,7 @@
 package com.tian.textbook.importexport.controller;
 
 import com.tian.textbook.common.ApiResponse;
+import com.tian.textbook.common.annotation.AuditLog;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.importexport.ImportService;
@@ -35,6 +36,7 @@ public class AdminImportController {
 
     // ============ 教材库导入（textbook:book:import） ============
 
+    @AuditLog(action = "IMPORT", resource = "import_batch")
     @PostMapping("/textbook/import")
     @PreAuthorize("hasAuthority('textbook:book:import')")
     public ApiResponse<BatchStartResponse> importTextbook(@RequestParam("file") MultipartFile file) {
@@ -51,6 +53,7 @@ public class AdminImportController {
 
     // ============ 课程任课导入（course:teacher:manage） ============
 
+    @AuditLog(action = "IMPORT", resource = "import_batch")
     @PostMapping("/teacher-course/import")
     @PreAuthorize("hasAuthority('course:teacher:manage')")
     public ApiResponse<BatchStartResponse> importTeacherCourse(
@@ -69,6 +72,7 @@ public class AdminImportController {
 
     // ============ 名单导入（people:student:import / people:teacher:import） ============
 
+    @AuditLog(action = "IMPORT", resource = "import_batch")
     @PostMapping("/user/import")
     @PreAuthorize("(#role == 'student' and hasAuthority('people:student:import')) "
             + "or (#role == 'teacher' and hasAuthority('people:teacher:import'))")

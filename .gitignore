@@ -3,3 +3,9 @@ logs/
 *.log
 target/
 .env
+# 数据导出/导入临时目录
+data/
+# IDE
+.idea/
+*.iml
+.vscode/

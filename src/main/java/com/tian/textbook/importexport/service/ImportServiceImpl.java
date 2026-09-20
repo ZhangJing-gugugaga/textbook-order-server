@@ -13,7 +13,6 @@ import com.tian.textbook.importexport.mapper.ImportBatchMapper;
 import com.tian.textbook.importexport.support.ImportUploadValidator;
 import com.tian.textbook.semester.SemesterActiveService;
 import com.tian.textbook.semester.mapper.SemesterMapper;
-import com.tian.textbook.system.audit.AuditService;
 import com.tian.textbook.system.config.ConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,7 +46,6 @@ public class ImportServiceImpl implements ImportService {
     private final ImportAsyncService importAsyncService;
     private final TextbookProperties properties;
     private final ConfigService configService;
-    private final AuditService auditService;
     private final SemesterActiveService activeSemesterService;
     private final SemesterMapper semesterMapper;
 
@@ -73,11 +71,7 @@ public class ImportServiceImpl implements ImportService {
         batch.setDeleted(0L);
         importBatchMapper.insert(batch);
 
-        Map<String, Object> detail = new LinkedHashMap<>();
-        detail.put("bizType", type);
-        detail.put("semesterId", targetSemester);
-        detail.put("fileName", file.getOriginalFilename());
-        auditService.record(AuditService.IMPORT, "import_batch", String.valueOf(batch.getId()), detail);
+        // 导入启动审计由 @AuditLog 切面记录（controller 层）；完成摘要（含停用计数）由 ImportAsyncService 落库
 
         try {
             importAsyncService.process(type, batch.getId(), targetSemester, stored.toString(),

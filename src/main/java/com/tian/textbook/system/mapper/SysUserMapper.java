@@ -57,9 +57,19 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
                        @Param("keyword") String keyword);
 
     /** 双缓冲切换⑤：由 user_semester_profile 同步 sys_user 归属冗余列（W6） */
-    @Update("UPDATE sys_user u LEFT JOIN user_semester_profile p "
-            + "ON p.user_id = u.id AND p.semester_id = #{semesterId} AND p.deleted = 0 "
-            + "SET u.college_id = p.college_id, u.class_id = p.class_id, u.updated_at = NOW(3)")
+    /**
+     * 双缓冲切换⑤：由 user_semester_profile 同步 sys_user 归属冗余列（W6）。
+     *
+     * <p>语义等价于 MySQL 多表 UPDATE（{@code UPDATE sys_user u LEFT JOIN user_semester_profile p ... SET u.college_id = p.college_id}）：
+     * 新学期有 profile 的用户取其归属，无 profile 的用户置 NULL。改用相关子查询表达，
+     * MySQL 与 H2（MySQL 模式，集成测试用）均可执行；子查询只读 user_semester_profile，
+     * 不触发 MySQL「can't specify target table」限制。</p>
+     */
+    @Update("UPDATE sys_user SET college_id = (SELECT p.college_id FROM user_semester_profile p "
+            + "WHERE p.user_id = sys_user.id AND p.semester_id = #{semesterId} AND p.deleted = 0), "
+            + "class_id = (SELECT p.class_id FROM user_semester_profile p "
+            + "WHERE p.user_id = sys_user.id AND p.semester_id = #{semesterId} AND p.deleted = 0), "
+            + "updated_at = NOW(3)")
     int syncCollegeClassFromProfile(@Param("semesterId") Long semesterId);
 
     /** 停用：即时踢下线（role_version+1 使旧 access 失效） */
