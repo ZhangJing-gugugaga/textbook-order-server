@@ -1,0 +1,18 @@
+# 本地开发：启动时自动执行 db/schema.sql + 权限码种子 + 种子数据（首次建库）
+spring:
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+      data-locations: classpath:db/data-permission.sql,classpath:db/data-seed.sql
+      continue-on-error: false
+  datasource:
+    url: ${DB_URL:jdbc:mysql:<SECRET_824596b7>}
+
+textbook:
+  export:
+    tmp-dir: ${TEXTBOOK_EXPORT_TMP:./data/export}
+
+logging:
+  level:
+    com.tian.textbook: DEBUG

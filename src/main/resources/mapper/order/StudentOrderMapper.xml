@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.order.mapper.StudentOrderMapper">
+
+    <sql id="listColumns">
+        o.id, o.semester_id, o.student_id, u.name AS studentName, u.user_no AS studentNo,
+        p.college_id AS collegeId, c.name AS collegeName,
+        p.class_id AS classId, sc.name AS className,
+        o.status, o.submitted_at, o.submit_snapshot,
+        (SELECT COALESCE(SUM(i.quantity), 0) FROM student_order_item i WHERE i.order_id = o.id AND i.deleted = 0) AS totalQuantity
+    </sql>
+
+    <select id="selectAllPage" resultType="com.tian.textbook.order.dto.StudentOrderListItem">
+        SELECT <include refid="listColumns"/>
+        FROM student_order o
+        JOIN sys_user u ON u.id = o.student_id AND u.deleted = 0
+        LEFT JOIN user_semester_profile p ON p.user_id = o.student_id AND p.semester_id = o.semester_id AND p.deleted = 0
+        LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
+        LEFT JOIN school_class sc ON sc.id = p.class_id AND sc.deleted = 0
+        WHERE o.deleted = 0
+        <if test="semesterId != null"> AND o.semester_id = #{semesterId}</if>
+        <if test="collegeId != null">
+            AND EXISTS (SELECT 1 FROM user_semester_profile p3
+                        WHERE p3.user_id = o.student_id AND p3.semester_id = o.semester_id
+                          AND p3.college_id = #{collegeId} AND p3.deleted = 0)
+        </if>
+        <if test="classId != null">
+            AND EXISTS (SELECT 1 FROM user_semester_profile p4
+                        WHERE p4.user_id = o.student_id AND p4.semester_id = o.semester_id
+                          AND p4.class_id = #{classId} AND p4.deleted = 0)
+        </if>
+        <if test="studentName != null and studentName != ''"> AND u.name LIKE CONCAT(#{studentName}, '%')</if>
+        ORDER BY o.submitted_at DESC, o.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(1) FROM student_order o
+        JOIN sys_user u ON u.id = o.student_id AND u.deleted = 0
+        WHERE o.deleted = 0
+        <if test="semesterId != null"> AND o.semester_id = #{semesterId}</if>
+        <if test="collegeId != null">
+            AND EXISTS (SELECT 1 FROM user_semester_profile p3
+                        WHERE p3.user_id = o.student_id AND p3.semester_id = o.semester_id
+                          AND p3.college_id = #{collegeId} AND p3.deleted = 0)
+        </if>
+        <if test="classId != null">
+            AND EXISTS (SELECT 1 FROM user_semester_profile p4
+                        WHERE p4.user_id = o.student_id AND p4.semester_id = o.semester_id
+                          AND p4.class_id = #{classId} AND p4.deleted = 0)
+        </if>
+        <if test="studentName != null and studentName != ''"> AND u.name LIKE CONCAT(#{studentName}, '%')</if>
+    </select>
+</mapper>

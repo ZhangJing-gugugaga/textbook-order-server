@@ -1,0 +1,19 @@
+# 移交学校环境：与试运行同拓扑（改 env 与 Nginx，不改代码）
+spring:
+  sql:
+    init:
+      mode: never
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:false}
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:false}
+
+logging:
+  level:
+    com.tian.textbook: INFO

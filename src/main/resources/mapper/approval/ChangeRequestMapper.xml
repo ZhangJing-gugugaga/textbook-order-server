@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.approval.mapper.ChangeRequestMapper">
+
+    <select id="selectPageByFilter" resultType="com.tian.textbook.approval.dto.ChangeRequestListItem">
+        SELECT r.id, r.semester_id, r.type, r.target_user_id, r.payload_json, r.status,
+               r.batch_no, r.applicant_id, r.reason, r.created_at, r.review_at,
+               t.name AS targetUserName, t.user_no AS targetUserNo,
+               tc.name AS currentCollegeName, tcl.name AS currentClassName,
+               a.name AS applicantName
+        FROM change_request r
+        JOIN sys_user t ON t.id = r.target_user_id AND t.deleted = 0
+        LEFT JOIN sys_user a ON a.id = r.applicant_id AND a.deleted = 0
+        LEFT JOIN college tc ON tc.id = t.college_id AND tc.deleted = 0
+        LEFT JOIN school_class tcl ON tcl.id = t.class_id AND tcl.deleted = 0
+        WHERE r.deleted = 0
+        <if test="semesterId != null"> AND r.semester_id = #{semesterId}</if>
+        <if test="status != null and status != ''"> AND r.status = #{status}</if>
+        <if test="batchNo != null and batchNo != ''"> AND r.batch_no = #{batchNo}</if>
+        <if test="type != null and type != ''"> AND r.type = #{type}</if>
+        ORDER BY r.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByFilter" resultType="long">
+        SELECT COUNT(1) FROM change_request r
+        WHERE r.deleted = 0
+        <if test="semesterId != null"> AND r.semester_id = #{semesterId}</if>
+        <if test="status != null and status != ''"> AND r.status = #{status}</if>
+        <if test="batchNo != null and batchNo != ''"> AND r.batch_no = #{batchNo}</if>
+        <if test="type != null and type != ''"> AND r.type = #{type}</if>
+    </select>
+</mapper>

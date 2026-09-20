@@ -1,0 +1,89 @@
+spring:
+  application:
+    name: textbook-order-server
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  # JSON 序列化：时间统一 Asia/Shanghai
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+  # 数据源：连接串经环境变量注入（SPEC §13，不硬编码）
+  datasource:
+    url: ${DB_URL:jdbc:mysql:<SECRET_824596b7>}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: TextbookHikariCP
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      connection-timeout: 30000
+  # schema.sql 为初始化脚本（部署手册交付物）；默认不自动执行，local profile 自动建库
+  sql:
+    init:
+      mode: never
+  mvc:
+    # 文件上传上限（import.max_file_mb 配置项另做业务校验）
+    format:
+      date-time: yyyy-MM-dd HH:mm:ss
+
+server:
+  port: ${SERVER_PORT:8080}
+  # Nginx 反代 /api/ → 8080/api/（SPEC §15），context-path 保持为空，接口自带 /api 前缀
+  error:
+    include-message: never
+    include-stacktrace: never
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    # 逻辑删除由各服务显式处理（deleted=0 过滤 + 删除写时间戳，W9），不开启 MP 逻辑删除
+  global-config:
+    banner: false
+
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:true}
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:true}
+    path: /swagger-ui.html
+  # OpenAPI 3 为唯一契约源（W12）
+  default-produces-media-type: application/json
+
+# 业务配置（SPEC §13 application-{env}.yml 主要键）
+textbook:
+  security:
+    login:
+      max-fail: 5            # 登录失败 5 次锁定（W20）
+      lock-minutes: 15       # 锁定 15 分钟
+  jwt:
+    secret: ${JWT_SECRET:textbook-dev-only-insecure-secret-key-32b}
+    access-minutes: 15       # access 15 分钟
+    refresh-days: 7          # refresh 7 天
+  import:
+    max-file-mb: 10          # 上传上限（与 system_config.import.max_file_mb 对应）
+    pool:
+      core-size: 2           # 专用线程池：核心 2 / 最大 4 / 队列 50
+      max-size: 4
+      queue-capacity: 50
+  export:
+    tmp-dir: ${TEXTBOOK_EXPORT_TMP:./data/export}
+    sync-row-threshold: 5000 # 预估行数 > 5000 走异步任务（Q16）
+    download-token-minutes: 10
+    retention-hours: 24      # 导出文件保留 24 小时
+  weixin:
+    miniapp:
+      appid: ${WX_MINIAPP_APPID:}
+      secret: ${WX_MINIAPP_SECRET:}
+
+logging:
+  level:
+    root: INFO
+    com.tian.textbook: ${LOG_LEVEL_APP:INFO}
+  # 日志按天轮转保留 30 天、不含密码/token（PRD 安全自检）
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

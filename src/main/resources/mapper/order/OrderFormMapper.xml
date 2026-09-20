@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.order.mapper.OrderFormMapper">
+
+    <!-- 教师姓名/学院经 sys_user + user_semester_profile 关联；明细统计经 order_form_item -->
+    <sql id="listColumns">
+        f.id, f.semester_id, f.teacher_id, u.name AS teacherName, u.user_no AS teacherNo,
+        p.college_id AS collegeId, c.name AS collegeName,
+        f.status, f.submitted_at, f.review_at, f.review_note, f.correct_deadline,
+        (SELECT COUNT(1) FROM order_form_item i WHERE i.form_id = f.id AND i.deleted = 0) AS itemCount,
+        (SELECT COALESCE(SUM(i.quantity), 0) FROM order_form_item i WHERE i.form_id = f.id AND i.deleted = 0) AS totalQuantity
+    </sql>
+
+    <sql id="collegeScope">
+        AND EXISTS (SELECT 1 FROM user_semester_profile p2
+                    WHERE p2.user_id = f.teacher_id AND p2.semester_id = f.semester_id
+                      AND p2.college_id = #{collegeId} AND p2.deleted = 0)
+    </sql>
+
+    <select id="selectCollegeFormsPage" resultType="com.tian.textbook.order.dto.OrderFormListItem">
+        SELECT <include refid="listColumns"/>
+        FROM order_form f
+        JOIN sys_user u ON u.id = f.teacher_id AND u.deleted = 0
+        LEFT JOIN user_semester_profile p ON p.user_id = f.teacher_id AND p.semester_id = f.semester_id AND p.deleted = 0
+        LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
+        WHERE f.deleted = 0 AND f.semester_id = #{semesterId}
+        <include refid="collegeScope"/>
+        <if test="status != null and status != ''"> AND f.status = #{status}</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+        ORDER BY f.submitted_at DESC, f.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countCollegeForms" resultType="long">
+        SELECT COUNT(1) FROM order_form f
+        JOIN sys_user u ON u.id = f.teacher_id AND u.deleted = 0
+        WHERE f.deleted = 0 AND f.semester_id = #{semesterId}
+        <include refid="collegeScope"/>
+        <if test="status != null and status != ''"> AND f.status = #{status}</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+    </select>
+
+    <select id="selectAllFormsPage" resultType="com.tian.textbook.order.dto.OrderFormListItem">
+        SELECT <include refid="listColumns"/>
+        FROM order_form f
+        JOIN sys_user u ON u.id = f.teacher_id AND u.deleted = 0
+        LEFT JOIN user_semester_profile p ON p.user_id = f.teacher_id AND p.semester_id = f.semester_id AND p.deleted = 0
+        LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
+        WHERE f.deleted = 0
+        <if test="semesterId != null"> AND f.semester_id = #{semesterId}</if>
+        <if test="collegeId != null">
+            AND EXISTS (SELECT 1 FROM user_semester_profile p3
+                        WHERE p3.user_id = f.teacher_id AND p3.semester_id = f.semester_id
+                          AND p3.college_id = #{collegeId} AND p3.deleted = 0)
+        </if>
+        <if test="status != null and status != ''"> AND f.status = #{status}</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+        ORDER BY f.submitted_at DESC, f.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countAllForms" resultType="long">
+        SELECT COUNT(1) FROM order_form f
+        JOIN sys_user u ON u.id = f.teacher_id AND u.deleted = 0
+        WHERE f.deleted = 0
+        <if test="semesterId != null"> AND f.semester_id = #{semesterId}</if>
+        <if test="collegeId != null">
+            AND EXISTS (SELECT 1 FROM user_semester_profile p3
+                        WHERE p3.user_id = f.teacher_id AND p3.semester_id = f.semester_id
+                          AND p3.college_id = #{collegeId} AND p3.deleted = 0)
+        </if>
+        <if test="status != null and status != ''"> AND f.status = #{status}</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+    </select>
+
+    <select id="countGroupByCollegeAndStatus" resultType="java.util.Map">
+        SELECT p.college_id AS collegeId, c.name AS collegeName, f.status AS status, COUNT(1) AS cnt
+        FROM order_form f
+        JOIN user_semester_profile p ON p.user_id = f.teacher_id AND p.semester_id = f.semester_id AND p.deleted = 0
+        LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
+        WHERE f.deleted = 0 AND f.semester_id = #{semesterId}
+        GROUP BY p.college_id, c.name, f.status
+    </select>
+</mapper>
