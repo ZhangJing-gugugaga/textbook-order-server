@@ -37,6 +37,21 @@ public interface NoticeRecordMapper extends BaseMapper<NoticeRecord> {
             + "  AND confirmed_at IS NOT NULL AND deleted = 0)")
     int insertConfirmIfAbsent(@Param("taskId") Long taskId, @Param("userId") Long userId);
 
-    /** 任务进度：已发送/未授权/失败/已确认人数 */
+    /** 任务进度：已发送/未授权/失败/已确认人数。详见 resources/mapper/notify/NoticeRecordMapper.xml。 */
     List<java.util.Map<String, Object>> countProgressByTask(@Param("taskId") Long taskId);
+
+    /** 未授权/失败名单（线下兜底，W5/R10）。详见 resources/mapper/notify/NoticeRecordMapper.xml。 */
+    List<java.util.Map<String, Object>> selectFailures(@Param("taskId") Long taskId,
+                                                       @Param("semesterId") Long semesterId,
+                                                       @Param("offset") long offset,
+                                                       @Param("limit") long limit);
+
+    long countFailures(@Param("taskId") Long taskId, @Param("semesterId") Long semesterId);
+
+    /**
+     * 通知汇总导出行（C4 扩展字段集：学号/工号、姓名、角色、学院、班级、各轮发送时间/状态、
+     * 确认状态、确认时间）。详见 resources/mapper/notify/NoticeRecordMapper.xml。
+     */
+    List<java.util.Map<String, Object>> selectTaskSummaryRows(@Param("taskId") Long taskId,
+                                                              @Param("semesterId") Long semesterId);
 }

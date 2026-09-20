@@ -32,4 +32,12 @@ public interface AuditLogMapper extends BaseMapper<AuditLog> {
                                   @Param("resource") String resource,
                                   @Param("startAt") LocalDateTime startAt,
                                   @Param("endAt") LocalDateTime endAt);
+
+    /** 窗口变更记录查询（谁/何时/原值→新值，W24）。详见 resources/mapper/system/AuditLogMapper.xml。 */
+    List<AuditLog> selectByResource(@Param("resource") String resource,
+                                    @Param("resourceId") String resourceId,
+                                    @Param("offset") long offset,
+                                    @Param("limit") long limit);
+
+    long countByResource(@Param("resource") String resource, @Param("resourceId") String resourceId);
 }

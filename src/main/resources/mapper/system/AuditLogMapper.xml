@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.system.mapper.AuditLogMapper">
+
+    <select id="selectByResource" resultType="com.tian.textbook.system.entity.AuditLog">
+        SELECT * FROM audit_log
+        WHERE resource = #{resource} AND resource_id = #{resourceId}
+        ORDER BY at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByResource" resultType="long">
+        SELECT COUNT(1) FROM audit_log WHERE resource = #{resource} AND resource_id = #{resourceId}
+    </select>
+</mapper>

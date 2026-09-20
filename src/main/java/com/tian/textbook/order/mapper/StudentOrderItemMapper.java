@@ -24,8 +24,10 @@ public interface StudentOrderItemMapper extends BaseMapper<StudentOrderItem> {
             "UPDATE student_order_item SET deleted = #{now} WHERE order_id = #{orderId} AND deleted = 0")
     int softDeleteByOrder(@Param("orderId") Long orderId, @Param("now") Long now);
 
-    /** 学生选购汇总（参考用量）：按教材聚合 */
-    List<java.util.Map<String, Object>> selectSummaryByTextbook(@Param("semesterId") Long semesterId,
-                                                                @Param("collegeId") Long collegeId,
-                                                                @Param("classId") Long classId);
+    /**
+     * 学生选购汇总原始行（参考用量，W18）：仅统计已提交（submitted）选购单；
+     * 按学院/班级/教材的分组聚合在 Service 层完成（submit_snapshot 为提交时归属快照，
+     * 异动不影响历史归属，W15）。
+     */
+    List<com.tian.textbook.order.dto.StudentOrderSummaryRow> selectSummaryRows(@Param("semesterId") Long semesterId);
 }

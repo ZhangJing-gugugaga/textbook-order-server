@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.order.mapper.StudentOrderItemMapper">
+
+    <!-- 学生选购汇总原始行（参考用量，W18）：仅统计已提交（submitted）选购单 -->
+    <select id="selectSummaryRows" resultType="com.tian.textbook.order.dto.StudentOrderSummaryRow">
+        SELECT o.student_id AS studentId, i.textbook_id AS textbookId, t.isbn AS isbn, t.title AS title,
+               o.submit_snapshot AS submitSnapshot, i.quantity AS quantity
+        FROM student_order_item i
+        JOIN student_order o ON o.id = i.order_id AND o.deleted = 0 AND o.status = 'submitted'
+        JOIN textbook t ON t.id = i.textbook_id AND t.deleted = 0
+        WHERE i.deleted = 0 AND o.semester_id = #{semesterId}
+        ORDER BY i.textbook_id
+    </select>
+</mapper>

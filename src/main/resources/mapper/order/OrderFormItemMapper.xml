@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.tian.textbook.order.mapper.OrderFormItemMapper">
+
+    <!--
+      已审核通过（reviewed）表单明细：教师征订明细导出 / 学生选购汇总的源数据。
+      字段：formId/teacherId/teacherName/teacherNo/collegeId/collegeName/classId/className/
+            courseId/courseName/textbookId/isbn/title/quantity。
+      秘书 scope 由调用方传 collegeId（经 user_semester_profile 归属，W6）。
+    -->
+    <select id="selectReviewedItems" resultType="java.util.Map">
+        SELECT f.id AS formId, f.teacher_id AS teacherId, u.name AS teacherName, u.user_no AS teacherNo,
+               p.college_id AS collegeId, c.name AS collegeName,
+               i.class_id AS classId, sc.name AS className,
+               i.course_id AS courseId, co.name AS courseName,
+               i.textbook_id AS textbookId, t.isbn AS isbn, t.title AS title, i.quantity AS quantity
+        FROM order_form_item i
+        JOIN order_form f ON f.id = i.form_id AND f.deleted = 0 AND f.status = 'reviewed'
+        JOIN sys_user u ON u.id = f.teacher_id AND u.deleted = 0
+        LEFT JOIN user_semester_profile p ON p.user_id = f.teacher_id AND p.semester_id = f.semester_id AND p.deleted = 0
+        LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
+        LEFT JOIN school_class sc ON sc.id = i.class_id AND sc.deleted = 0
+        LEFT JOIN course co ON co.id = i.course_id AND co.deleted = 0
+        LEFT JOIN textbook t ON t.id = i.textbook_id AND t.deleted = 0
+        WHERE i.deleted = 0 AND f.semester_id = #{semesterId}
+        <if test="collegeId != null"> AND p.college_id = #{collegeId}</if>
+        ORDER BY c.name, u.name, i.class_id
+    </select>
+</mapper>

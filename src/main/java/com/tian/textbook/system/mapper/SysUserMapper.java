@@ -39,4 +39,33 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
     @Select("<script>SELECT * FROM sys_user WHERE deleted = 0 AND status = 1 AND college_id IN "
             + "<foreach item='c' collection='collegeIds' open='(' separator=',' close=')'>#{c}</foreach></script>")
     List<SysUser> selectActiveByCollegeIds(@Param("collegeIds") List<Long> collegeIds);
+
+    /**
+     * 账号检索分页（角色/学院/状态/关键字）。详见 resources/mapper/system/SysUserMapper.xml。
+     */
+    List<com.tian.textbook.system.dto.UserListItem> selectPageByFilter(
+            @Param("roleCode") String roleCode,
+            @Param("collegeId") Long collegeId,
+            @Param("status") Integer status,
+            @Param("keyword") String keyword,
+            @Param("offset") long offset,
+            @Param("limit") long limit);
+
+    long countByFilter(@Param("roleCode") String roleCode,
+                       @Param("collegeId") Long collegeId,
+                       @Param("status") Integer status,
+                       @Param("keyword") String keyword);
+
+    /** 双缓冲切换⑤：由 user_semester_profile 同步 sys_user 归属冗余列（W6） */
+    @Update("UPDATE sys_user u LEFT JOIN user_semester_profile p "
+            + "ON p.user_id = u.id AND p.semester_id = #{semesterId} AND p.deleted = 0 "
+            + "SET u.college_id = p.college_id, u.class_id = p.class_id, u.updated_at = NOW(3)")
+    int syncCollegeClassFromProfile(@Param("semesterId") Long semesterId);
+
+    /** 停用：即时踢下线（role_version+1 使旧 access 失效） */
+    @Update("UPDATE sys_user SET status = 0, updated_at = NOW(3) WHERE id = #{id} AND deleted = 0")
+    int disableById(@Param("id") Long id);
+
+    @Update("UPDATE sys_user SET status = 1, updated_at = NOW(3) WHERE id = #{id} AND deleted = 0")
+    int enableById(@Param("id") Long id);
 }
