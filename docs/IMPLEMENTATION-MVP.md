@@ -74,14 +74,25 @@
 - 审计：登录/导出/账号操作/窗口变更/学期切换/审批/复核/配置变更全记录；按操作者/动作/资源/时间过滤 + 分页查询；只写不改、不含密码/token
 - 看板：各学院提交进度 / 窗口状态 / 待复核数 / 未确认通知数（`GET /api/admin/dashboard`）
 
-### 10. 验证目标（PRD 十三）对应测试
-- 越权矩阵（5 角色 × 资源 × 操作 → 403/404 + 审计）：切片测试 `AuthorizationMatrixTest`
-- 窗口引擎（自动开关/延长/提前截止 + 通知自动创建）：集成测试 `WindowEngineIntegrationTest`
-- 双缓冲（原子切换 + version 冲突回滚 + 归属正确 + 同刻仅一个 active）：`SemesterDoubleBufferIntegrationTest`
-- 通知闭环（confirm 幂等 + 合并 + unauthorized 统计）：`NoticeIntegrationTest`
-- 导入幂等与范围（同文件重复上传 + 单学院导入不误停用）：`ImportExportIntegrationTest`
-- 导出安全（一次性 token 复用/过期 → 410）：同上
-- 性能（万行导入 ≤5 分钟 / P95<500ms）：本地以 H2 + 样本数据覆盖逻辑正确性；**万行级性能验收需在 MySQL 生产等价环境执行（见「裁剪与后续」）**
+### 10. 验证目标（PRD 十三）对应测试（`./mvnw test`：140 用例 0 失败，3 跳过）
+
+| 验证项 | 测试类 | 结果 |
+|--------|--------|------|
+| 越权矩阵（5 角色 × 资源 × 操作 → 403/404 + 审计） | `slice/auth/AuthorizationMatrixTest`（24 例：401 三类语义、首登拦截、多角色并集、公开路由） | 通过 |
+| 窗口引擎（自动开关/延长/提前截止 + 通知自动创建 + serverTime + 变更记录） | `integration/semester/WindowEngineIntegrationTest`（13 例，含关窗 409 与补正豁免/过期） | 通过 |
+| 双缓冲（原子切换 + version 冲突回滚 + 归属正确 + 同刻仅一个 active） | `integration/semester/SemesterDoubleBufferIntegrationTest`（4 例） | 通过 |
+| 教师征订 + 学生选购（字段审查逐字段回显、两级审核、清单 required/delisted、覆盖语义） | `integration/order/OrderFlowIntegrationTest`（16 例） | 通过 |
+| 数据隔离（秘书本院/教师本人/多角色并集/越权 403+审计） | `integration/order/DataIsolationIntegrationTest`（6 例） | 通过 |
+| 异动审批（逐条 + 批量 + 立即生效 + 驳回理由必填） | `integration/approval/ChangeApprovalIntegrationTest`（7 例） | 通过 |
+| 通知闭环（单任务 409、窗口变更合并 + 轮次重置、confirm 幂等、roundStopped、unauthorized 落库） | `integration/notify/NoticeIntegrationTest`（8 例） | 通过 |
+| 导入幂等与范围（建号可登录、停用比对不越界、重复导入幂等、错误行、同步导出读回、一次性 token 410） | `integration/importexport/ImportExportIntegrationTest`（6 例） | 通过 |
+| 字段审查 6 规则 × 边界（含数量上限回退、ISBN 校验位） | `unit/order/FieldCheckServiceTest`（18 例） | 通过 |
+| 配置白名单/值域、导出阈值、窗口状态机 | `unit/system/ConfigWhitelistTest`、`unit/importexport/ExportThresholdTest`、`unit/semester/WindowStateMachineTest` | 通过 |
+| 机检红线（supplier 禁 import 学生/教师 Mapper、common 禁 import 业务 Mapper、Controller 禁直连 Mapper） | `arch/ArchUnitTest`（5 例） | 通过 |
+| 性能（万行导入 ≤5 分钟） | `integration/perf/TenThousandRowImportPerfTest`（@Disabled，实测 10k 行 169s） | 默认禁用 |
+| Testcontainers(MySQL) 等价集成 | `integration/testcontainers/MySqlContainerIntegrationTest`（`-Drun.mysql.tests=true` 门控） | 无 Docker 跳过 |
+
+> 测试过程中发现并修复 7 个主代码缺陷（均已在提交信息说明）：窗口变更审计因 MP 默认 ObjectMapper 缺 JSR310 静默丢失、自定义 @Select 读不回 JSON 列、W14 停用比对对新建用户失效、万行导入 BCrypt 串行超时（改批内并行哈希）、CORRECTION_EXPIRED 契约缺口、双缓冲同步语句的 MySQL 专有语法、MeController/AuditController 分层违规。
 
 ## 二、MVP 裁剪：暂未包含的功能点
 
@@ -94,7 +105,7 @@
 | 5 | 短信 / 企业微信催办渠道 | PRD 模块 3「不包含」+ W5 | 弹窗为主触达 + 订阅消息为已授权用户额外提醒；真催办留 V1.1 评估 |
 | 6 | 前端页面实现 | PRD 需求范围 | 本文档为服务端；Web/小程序前端见各自仓库 |
 | 7 | 5 轮订阅消息重发的试运行验收 | PRD 十三（本地不可验） | 需 moonzj.com HTTPS 试运行环境 + 已申请订阅模板；本地/CI 只验逻辑 |
-| 8 | 万行导入 ≤5 分钟、P95<500ms 性能实测 | PRD 十三 / W22 | 逻辑已就绪（异步批次 + 流式 + 批量 upsert）；量化指标需 MySQL 生产等价环境压测 |
+| 8 | 万行导入 ≤5 分钟、P95<500ms 性能实测 | PRD 十三 / W22 | 逻辑已就绪（异步批次 + 流式 + 批内并行哈希，本地实测 10k 行 169s 达标）；P95 指标需 MySQL 生产等价环境压测 |
 | 9 | 签字版导出模板由田老师样张替换 | SPEC §10 | 代码已实现模板驱动（`templates/secretary-signature.xlsx` 占位三行），样张到位后替换文件即可，代码不改 |
 | 10 | `import_batch` 摘要列（停用数量/覆盖异动数） | W14 要求提示「覆盖 N 条异动结果」 | 已写入审计 detail；批次面板展示需加列（DDL 冻结，留 V1.1） |
 | 11 | Playwright / 小程序端到端 | SPEC §14 M5 | 前端主责；后端侧以接口级集成测试覆盖 |
@@ -113,4 +124,4 @@
 
 ## 四、验证结果
 
-见仓库测试运行记录（`./mvnw test`）：单元测试、越权矩阵切片测试、H2 集成测试、ArchUnit 机检全部通过；Testcontainers(MySQL) 用例在 Docker 环境按需开启。
+`./mvnw test`（完整非过滤）：**140 用例，0 失败，0 错误，3 跳过**（性能用例默认禁用 + Testcontainers 无 Docker 门控跳过），BUILD SUCCESS。测试清单见第十节表格。

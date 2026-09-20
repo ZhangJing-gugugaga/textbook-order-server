@@ -1,6 +1,7 @@
 package com.tian.textbook.stats.service;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.tian.textbook.common.util.MapKeys;
 import com.tian.textbook.notify.service.NotifyService;
 import com.tian.textbook.order.entity.StudentOrder;
 import com.tian.textbook.order.mapper.OrderFormMapper;
@@ -71,18 +72,18 @@ public class StatsService {
         }
         // 教师表单按学院 × 状态聚合（reviewed 等状态计数）
         for (Map<String, Object> row : orderFormMapper.countGroupByCollegeAndStatus(active.getId())) {
-            Long collegeId = toLong(row.get("collegeId"));
+            Long collegeId = toLong(MapKeys.pick(row, "collegeId"));
             if (collegeId == null) {
                 continue; // 无学院归属的表单不计入学院行（隔离外数据）
             }
             CollegeProgress progress = progressByCollege.computeIfAbsent(collegeId, key -> {
                 CollegeProgress created = new CollegeProgress();
                 created.setCollegeId(collegeId);
-                created.setCollegeName(String.valueOf(row.get("collegeName")));
+                created.setCollegeName(String.valueOf(MapKeys.pick(row, "collegeName")));
                 return created;
             });
-            long cnt = toLong(row.get("cnt"));
-            String status = String.valueOf(row.get("status"));
+            long cnt = toLong(MapKeys.pick(row, "cnt"));
+            String status = String.valueOf(MapKeys.pick(row, "status"));
             switch (status) {
                 case "pending_review" -> {
                     progress.setPendingReview(cnt);
@@ -103,12 +104,12 @@ public class StatsService {
         }
         // 在册教师数（active 学期 profile + TEACHER 角色）
         for (Map<String, Object> row : statsMapper.countTeachersByCollege(active.getId())) {
-            Long collegeId = toLong(row.get("collegeId"));
+            Long collegeId = toLong(MapKeys.pick(row, "collegeId"));
             if (collegeId == null) {
                 continue;
             }
             progressByCollege.computeIfPresent(collegeId, (key, progress) -> {
-                progress.setTeacherTotal(toLong(row.get("teacherTotal")));
+                progress.setTeacherTotal(toLong(MapKeys.pick(row, "teacherTotal")));
                 return progress;
             });
         }

@@ -10,6 +10,7 @@ import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.notify.WindowChangeNotifier;
 import com.tian.textbook.common.semester.SemesterContextHolder;
+import com.tian.textbook.common.util.MapKeys;
 import com.tian.textbook.notify.dto.NoticeConfirmRequest;
 import com.tian.textbook.notify.dto.NoticeFailureItem;
 import com.tian.textbook.notify.dto.NoticeProgressResponse;
@@ -245,8 +246,9 @@ public class NotifyService implements WindowChangeNotifier {
         NoticeTask task = requireTask(id);
         NoticeProgressResponse response = new NoticeProgressResponse();
         for (Map<String, Object> row : noticeRecordMapper.countProgressByTask(task.getId())) {
-            String status = Objects.toString(row.get("sendStatus"), null);
-            long count = toLong(row.get("userCount"));
+            // H2/MySQL 列标签大小写差异兼容（MapKeys）
+            String status = Objects.toString(MapKeys.pick(row, "sendStatus"), null);
+            long count = toLong(MapKeys.pick(row, "userCount"));
             switch (status == null ? "" : status) {
                 case "sent" -> response.setSent(count);
                 case "unauthorized" -> response.setUnauthorized(count);

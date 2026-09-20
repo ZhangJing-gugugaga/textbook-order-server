@@ -319,6 +319,12 @@ public class TestDataSeeder {
         return role == null ? null : role.getId();
     }
 
+    /** 按 user_no 查用户 id（不存在返回 null）。 */
+    public Long userIdByNo(String userNo) {
+        SysUser user = userMapper.selectByUserNo(userNo);
+        return user == null ? null : user.getId();
+    }
+
     public Semester semesterByName(String name) {
         return semesterMapper.selectList(Wrappers.<Semester>lambdaQuery()
                         .eq(Semester::getName, name).eq(Semester::getDeleted, 0))

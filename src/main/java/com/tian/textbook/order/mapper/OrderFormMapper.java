@@ -5,6 +5,7 @@ import com.tian.textbook.common.annotation.CollegeScope;
 import com.tian.textbook.order.entity.OrderForm;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
@@ -12,9 +13,18 @@ import java.util.List;
 @Mapper
 public interface OrderFormMapper extends BaseMapper<OrderForm> {
 
+    /**
+     * MP 自动 resultMap（@TableName(autoResultMap=true) 生成，含 field_check_result 的
+     * JacksonTypeHandler）：自定义 @Select 不会自动套用，需显式引用，否则 JSON 列被
+     * 自动映射静默丢弃（field_check_result 读回为 null，违背 SPEC §11.4「详情含 field_check_result」）。
+     */
+    String RESULT_MAP = "com.tian.textbook.order.mapper.OrderFormMapper.mybatis-plus_OrderForm";
+
+    @ResultMap(RESULT_MAP)
     @Select("SELECT * FROM order_form WHERE semester_id = #{semesterId} AND teacher_id = #{teacherId} AND deleted = 0")
     OrderForm selectBySemesterAndTeacher(@Param("semesterId") Long semesterId, @Param("teacherId") Long teacherId);
 
+    @ResultMap(RESULT_MAP)
     @Select("SELECT * FROM order_form WHERE id = #{id} AND deleted = 0")
     OrderForm selectByIdSoft(@Param("id") Long id);
 

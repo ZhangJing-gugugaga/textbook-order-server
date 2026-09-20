@@ -21,7 +21,8 @@ import java.util.Set;
  *
  * <p>放行条件：window_status='open' && channel_open=1。例外（W4）：被驳回表单的补正重提
  * 豁免——仅限本人该表单、状态 ∈ {rejected, rejected_auto}、且未过补正截止
- * （correct_deadline = 关窗时间 + order.correct_window_days）。</p>
+ * （correct_deadline = 关窗时间 + order.correct_window_days）；补正截止已过 →
+ * 409 CORRECTION_EXPIRED（区别于「本期征订已截止」的精确语义）。</p>
  */
 @Slf4j
 @Service
@@ -41,8 +42,16 @@ public class WindowGuardImpl implements WindowGuard {
         if (semester == null) {
             throw new BizException(ErrorCode.BIZ_ERROR, "尚未激活任何学期，请联系教材室");
         }
-        if (exemption == WithinWindow.Exemption.CORRECTION && isCorrectionAllowed(semesterId)) {
-            return;
+        if (exemption == WithinWindow.Exemption.CORRECTION) {
+            switch (correctionState(semesterId)) {
+                case ALLOWED -> {
+                    return;
+                }
+                case EXPIRED -> throw new BizException(ErrorCode.CORRECTION_EXPIRED);
+                case NOT_APPLICABLE -> {
+                    // 非补正场景：走常规窗口校验
+                }
+            }
         }
         if (Integer.valueOf(1).equals(semester.getChannelOpen()) && "open".equals(semester.getWindowStatus())) {
             return;
@@ -53,17 +62,30 @@ public class WindowGuardImpl implements WindowGuard {
         throw new BizException(ErrorCode.WINDOW_NOT_OPEN);
     }
 
-    /** 补正豁免：本人该表单状态 ∈ {rejected, rejected_auto} 且未过 correct_deadline */
-    private boolean isCorrectionAllowed(Long semesterId) {
+    /** 补正豁免状态：本人该表单状态 ∈ {rejected, rejected_auto} 且未过 correct_deadline */
+    private CorrectionState correctionState(Long semesterId) {
         var current = com.tian.textbook.common.SecurityUtils.currentUser();
         if (current == null) {
-            return false;
+            return CorrectionState.NOT_APPLICABLE;
         }
         OrderForm form = orderFormMapper.selectBySemesterAndTeacher(semesterId, current.userId());
         if (form == null || !Set.of("rejected", "rejected_auto").contains(form.getStatus())) {
-            return false;
+            return CorrectionState.NOT_APPLICABLE;
         }
         LocalDateTime deadline = form.getCorrectDeadline();
-        return deadline == null || deadline.isAfter(LocalDateTime.now());
+        if (deadline != null && !deadline.isAfter(LocalDateTime.now())) {
+            // 补正窗口已过：区别于「本期征订已截止」的精确语义（SPEC §6 / 错误码表）
+            return CorrectionState.EXPIRED;
+        }
+        return CorrectionState.ALLOWED;
+    }
+
+    private enum CorrectionState {
+        /** 补正重提豁免成立（表单被驳回且补正截止未过） */
+        ALLOWED,
+        /** 表单被驳回但补正截止已过 → 409 CORRECTION_EXPIRED */
+        EXPIRED,
+        /** 无被驳回表单 → 不适用豁免，走常规窗口校验 */
+        NOT_APPLICABLE
     }
 }

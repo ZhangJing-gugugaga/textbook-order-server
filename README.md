@@ -59,14 +59,15 @@ java -Duser.timezone=Asia/Shanghai -jar target/textbook-order-server.jar --sprin
 ## 测试
 
 ```bash
-./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检
+./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检（140 用例）
 ./mvnw test -Drun.mysql.tests=true   # Docker 可用时追加 Testcontainers(MySQL) 集成用例
 ```
 
-- 单元：字段审查 6 规则 × 边界、导出阈值、配置白名单
-- 切片：5 角色 × 资源 × 操作越权矩阵（100% 拒绝 + 审计）、401 三类语义、must_change_password 拦截
-- 集成（H2 MySQL 模式）：双缓冲原子切换（含 version 冲突回滚）、窗口自动开关幂等、导入批次与停用比对、重提覆盖、confirm 幂等、一次性 token 410
-- 机检：ArchUnit —— supplier 包禁 import 学生/教师 Mapper、common 包禁 import 业务 Mapper、Controller 禁直连 Mapper
+- 单元（32 例）：字段审查 6 规则 × 边界（含数量上限回退、ISBN 校验位）、导出阈值、配置白名单、窗口状态机
+- 切片（24 例）：5 角色 × 资源 × 操作越权矩阵（100% 拒绝 + 审计）、401 三类语义、must_change_password 拦截、多角色并集
+- 集成（60 例，H2 MySQL 模式）：双缓冲原子切换（含 version 冲突回滚）、窗口自动开关幂等、导入批次与停用比对、重提覆盖、confirm 幂等、一次性 token 410
+- 机检（5 例）：ArchUnit —— supplier 包禁 import 学生/教师 Mapper、common 包禁 import 业务 Mapper、Controller 禁直连 Mapper
+- 性能（默认禁用）：1 万行导入样本实测 169s（≤5 分钟，W22）
 
 ## 工程结构（SPEC §2）
 

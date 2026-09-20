@@ -5,6 +5,7 @@ import com.tian.textbook.common.annotation.CollegeScope;
 import com.tian.textbook.order.entity.StudentOrder;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
@@ -12,9 +13,14 @@ import java.util.List;
 @Mapper
 public interface StudentOrderMapper extends BaseMapper<StudentOrder> {
 
+    /** MP 自动 resultMap（含 submit_snapshot 的 JacksonTypeHandler）：自定义 @Select 需显式引用。 */
+    String RESULT_MAP = "com.tian.textbook.order.mapper.StudentOrderMapper.mybatis-plus_StudentOrder";
+
+    @ResultMap(RESULT_MAP)
     @Select("SELECT * FROM student_order WHERE semester_id = #{semesterId} AND student_id = #{studentId} AND deleted = 0")
     StudentOrder selectBySemesterAndStudent(@Param("semesterId") Long semesterId, @Param("studentId") Long studentId);
 
+    @ResultMap(RESULT_MAP)
     @Select("SELECT * FROM student_order WHERE id = #{id} AND deleted = 0")
     StudentOrder selectByIdSoft(@Param("id") Long id);
 

@@ -62,6 +62,7 @@ public class ImportRowWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void writeStudentRows(List<StudentImportRow> rows, ImportRunContext ctx) {
         Long studentRoleId = ctx.roleId("STUDENT");
+        Map<String, String> passwordHashes = hashInitialPasswords(rows, StudentImportRow::getUserNo);
         for (StudentImportRow row : rows) {
             String userNo = row.getUserNo().trim();
             SysUser user = ctx.user(userNo);
@@ -70,13 +71,19 @@ public class ImportRowWriter {
                 created.setUserNo(userNo);
                 created.setName(row.getName().trim());
                 created.setPhone(blankToNull(row.getPhone()));
-                created.setPasswordHash(passwordEncoder.encode(UserService.initialPassword(userNo)));
+                created.setPasswordHash(passwordHashes.get(userNo));
                 created.setStatus(1);
                 created.setMustChangePassword(1);
                 created.setFirstLoginVerified(0);
                 created.setFailCount(0);
                 created.setRoleVersion(1);
                 created.setDeleted(0L);
+                // 目标学期即 active 学期才写 sys_user 归属冗余列（与既有用户分支一致，SPEC §5.2）；
+                // 不写则 W14 停用比对（按 college_id 圈范围）永远匹配不到新建用户
+                if (ctx.writeUserAffiliation()) {
+                    created.setCollegeId(row.getCollegeId());
+                    created.setClassId(row.getClassId());
+                }
                 userMapper.insert(created);
                 bindRole(created.getId(), studentRoleId);
                 ctx.putUser(created);
@@ -104,6 +111,7 @@ public class ImportRowWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void writeTeacherRows(List<TeacherImportRow> rows, ImportRunContext ctx) {
         Long teacherRoleId = ctx.roleId("TEACHER");
+        Map<String, String> passwordHashes = hashInitialPasswords(rows, TeacherImportRow::getUserNo);
         for (TeacherImportRow row : rows) {
             String userNo = row.getUserNo().trim();
             SysUser user = ctx.user(userNo);
@@ -112,13 +120,17 @@ public class ImportRowWriter {
                 created.setUserNo(userNo);
                 created.setName(row.getName().trim());
                 created.setPhone(blankToNull(row.getPhone()));
-                created.setPasswordHash(passwordEncoder.encode(UserService.initialPassword(userNo)));
+                created.setPasswordHash(passwordHashes.get(userNo));
                 created.setStatus(1);
                 created.setMustChangePassword(1);
                 created.setFirstLoginVerified(0);
                 created.setFailCount(0);
                 created.setRoleVersion(1);
                 created.setDeleted(0L);
+                // 同 writeStudentRows：active 学期导入才写归属冗余列（W14 停用比对依赖）
+                if (ctx.writeUserAffiliation()) {
+                    created.setCollegeId(row.getCollegeId());
+                }
                 userMapper.insert(created);
                 bindRole(created.getId(), teacherRoleId);
                 ctx.putUser(created);
@@ -243,6 +255,21 @@ public class ImportRowWriter {
     }
 
     // ============ 私有 ============
+
+    /**
+     * 批量预哈希初始密码（SPEC §14 万行导入 ≤5 分钟）。
+     *
+     * <p>BCrypt(strength 10) 单次约 60-100ms，万行单线程串行需 10+ 分钟，远超验收预算；
+     * 哈希是纯 CPU 计算、无 DB 访问，在批内并行（commonPool，8 核机约 6-8x）后回落至分钟级。
+     * 仅对「文件中不存在的 user_no」真正用到，重复 user_no 由 merge 函数去重。</p>
+     */
+    private <T> Map<String, String> hashInitialPasswords(List<T> rows,
+                                                         java.util.function.Function<T, String> userNoOf) {
+        return rows.parallelStream().collect(java.util.stream.Collectors.toConcurrentMap(
+                row -> userNoOf.apply(row).trim(),
+                row -> passwordEncoder.encode(UserService.initialPassword(userNoOf.apply(row).trim())),
+                (existing, ignored) -> existing));
+    }
 
     private void bindRole(Long userId, Long roleId) {
         if (roleId == null) {

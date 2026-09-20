@@ -3,7 +3,6 @@ package com.tian.textbook.system.audit;
 import com.tian.textbook.common.ApiResponse;
 import com.tian.textbook.common.PageResponse;
 import com.tian.textbook.system.entity.AuditLog;
-import com.tian.textbook.system.mapper.AuditLogMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,6 +16,9 @@ import java.util.List;
 
 /**
  * 审计日志查询（W24 / SPEC §11.5：按操作者/动作/资源/时间过滤 + 分页；只读）。
+ *
+ * <p>分层：Controller 只解析 HTTP 参数，数据查询走 {@link AuditService}（SPEC §2 机检红线：
+ * Controller 不得直连 Mapper）。</p>
  */
 @RestController
 @RequestMapping("/api/admin/audit")
@@ -25,7 +27,7 @@ public class AuditController {
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    private final AuditLogMapper auditLogMapper;
+    private final AuditService auditService;
 
     @GetMapping
     @PreAuthorize("hasAuthority('audit:log:view')")
@@ -46,7 +48,7 @@ public class AuditController {
         }
         long safeSize = Math.min(Math.max(size, 1), 200);
         long offset = (Math.max(page, 1) - 1) * safeSize;
-        List<AuditLog> list = auditLogMapper.selectByFilter(userId, userNo, action, resource, start, end);
+        List<AuditLog> list = auditService.query(userId, userNo, action, resource, start, end);
         // selectByFilter 返回全量匹配，此处按分页窗口截断（数据量为审计级，可接受）
         int from = (int) Math.min(offset, list.size());
         int to = (int) Math.min(offset + safeSize, list.size());

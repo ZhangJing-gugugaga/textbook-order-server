@@ -1,6 +1,8 @@
 package com.tian.textbook.support;
 
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationListener;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.DataSourceUtils;
@@ -48,7 +50,15 @@ public final class H2SchemaInitializer {
     public static final class ReadyListener implements ApplicationListener<ApplicationReadyEvent> {
         @Override
         public void onApplicationEvent(ApplicationReadyEvent event) {
-            run(event.getApplicationContext().getBean(DataSource.class));
+            ApplicationContext context = event.getApplicationContext();
+            DataSource dataSource;
+            try {
+                dataSource = context.getBean(DataSource.class);
+            } catch (NoSuchBeanDefinitionException e) {
+                // 切片测试（@WebMvcTest）等无数据源上下文：跳过建表
+                return;
+            }
+            run(dataSource);
         }
     }
 

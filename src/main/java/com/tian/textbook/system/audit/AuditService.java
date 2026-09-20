@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -39,6 +40,17 @@ public class AuditService {
 
     public AuditService(AuditLogMapper auditLogMapper) {
         this.auditLogMapper = auditLogMapper;
+    }
+
+    /**
+     * 审计查询（W24：按操作者/动作/资源/时间过滤，at DESC；分页由调用方截断）。
+     *
+     * <p>Controller 不直连 Mapper（SPEC §2 分层约束），查询收敛在 Service。</p>
+     */
+    @Transactional(readOnly = true)
+    public List<AuditLog> query(Long userId, String userNo, String action, String resource,
+                                java.time.LocalDateTime startAt, java.time.LocalDateTime endAt) {
+        return auditLogMapper.selectByFilter(userId, userNo, action, resource, startAt, endAt);
     }
 
     /** 与业务操作同事务（关键动作：审批/切换/复核/配置/账号/窗口变更）。 */
