@@ -32,7 +32,7 @@ textbook-order-server/
 ├─ src/main/resources/
 │  ├─ application.yml / application-local.yml / application-trial.yml / application-school.yml
 │  ├─ db/schema.sql                                  # §3 DDL（初始化脚本）
-│  ├─ db/data-permission.sql                         # sys_permission 权限码种子（36 条）
+│  ├─ db/data-permission.sql                         # sys_permission 权限码种子（37 条）
 │  ├─ db/data-seed.sql                               # 种子数据（M1 交付物）
 │  └─ templates/                                     # 5 张 Excel 导入模板 + 签字版导出模板
 └─ src/main/java/com/tian/textbook/
@@ -122,7 +122,7 @@ CREATE TABLE sys_permission (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (id), UNIQUE KEY uk_perm_code (perm_code, deleted)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='权限码（36 条种子见 db/data-permission.sql）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='权限码（37 条种子见 db/data-permission.sql）';
 
 CREATE TABLE sys_user_role (
   id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NOT NULL, role_id BIGINT NOT NULL,
