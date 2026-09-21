@@ -1,6 +1,6 @@
 -- ============================================================================
 -- 种子数据（M1 交付物）：组织三表、学期（active+draft）、系统配置 8 键、
--- 17 个测试账号（每角色 ≥3：正常/首登待改密/停用）、按学期归属、教材/课程/任课
+-- 18 个测试账号（每角色 ≥3：正常/首登待改密/停用）、按学期归属、教材/课程/任课
 --
 -- 账号清单（初始密码 = 学号/工号后 6 位；「正常」账号使用文档口令可直接登录）：
 --   ADMIN     900001 张管理  Admin@123（正常）   900002 李管理（首登待改密，初始 900002）   900003 王管理（停用）
@@ -10,7 +10,7 @@
 --             700103 教师戊  Tea@12345（正常，教师+秘书双角色，演示切换身份与多角色并集）
 --   STUDENT   20230101 学生甲 Stu@12345（正常）  20230102 学生乙（首登待改密，初始 20230102）
 --             20230103 学生丙（停用）            20230201 学生丁 Stu@12345（正常，外国语学院）
---   SUPPLIER  600001 供货商甲 Sup@12345（正常）  600002 供货商乙（停用）
+--   SUPPLIER  600001 供货商甲 Sup@12345（正常）  600002 供货商乙（停用）  600003 供货商丙（首登待改密，初始 600003）
 -- 首登校验手机号后 4 位：各账号 phone 字段（如 学生甲=13700001001，后 4 位 0001）
 -- ============================================================================
 SET NAMES utf8mb4;
@@ -80,7 +80,8 @@ INSERT INTO sys_user (user_no, name, password_hash, phone, college_id, class_id,
 ('20230201', '学生丁', '$2a$10$tPstQvIwGzgEFjCA2YWdCekx8rlfQzCrGotpVJz7I6otFCurl9zCa', '13700002001', (SELECT id FROM college WHERE name='外国语学院'), (SELECT id FROM school_class WHERE name='英语2023-1'), 1, 0, 1, 0, 1),
 -- SUPPLIER
 ('600001', '供货商甲', '$2a$10$tIPuCasNS75zg12R9MIH/eMCvlGl1BAPLy5msUNWzl3yBmXrzW0Ci', '13500000001', NULL, NULL, 1, 0, 1, 0, 1),
-('600002', '供货商乙', '$2a$10$zjrSEOTMmHXMeFfB7.Jjr.57jPJfd/Ihp49u.k8BYbfowr4W/gFfG', '13500000002', NULL, NULL, 0, 1, 0, 0, 1);
+('600002', '供货商乙', '$2a$10$zjrSEOTMmHXMeFfB7.Jjr.57jPJfd/Ihp49u.k8BYbfowr4W/gFfG', '13500000002', NULL, NULL, 0, 1, 0, 0, 1),
+('600003', '供货商丙', '$2a$10$luufjRLdB1tOyIBiUGNuAemKl9l6DEpa386diHp1NE2.Vm9UvLeeO', '13500000003', NULL, NULL, 1, 1, 0, 0, 1);
 
 -- ============ 用户-角色绑定 ============
 INSERT INTO sys_user_role (user_id, role_id)
@@ -102,7 +103,8 @@ FROM (SELECT '900001' AS user_no, 'ADMIN' AS role_code
       UNION ALL SELECT '20230103', 'STUDENT'
       UNION ALL SELECT '20230201', 'STUDENT'
       UNION ALL SELECT '600001', 'SUPPLIER'
-      UNION ALL SELECT '600002', 'SUPPLIER') pairs
+      UNION ALL SELECT '600002', 'SUPPLIER'
+      UNION ALL SELECT '600003', 'SUPPLIER') pairs
 JOIN sys_user u ON u.user_no = pairs.user_no
 JOIN sys_role r ON r.role_code = pairs.role_code;
 
