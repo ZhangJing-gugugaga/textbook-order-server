@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -29,6 +30,8 @@ public class ExportTask {
 
     private Integer rowEstimate;
 
+    /** 服务器内部路径：不下发前端（@JsonIgnore） */
+    @JsonIgnore
     private String filePath;
 
     /** 一次性下载 token（首次下载后置空） */

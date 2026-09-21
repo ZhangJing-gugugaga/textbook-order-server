@@ -3,7 +3,6 @@ package com.tian.textbook.importexport.controller;
 import com.tian.textbook.common.ApiResponse;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
-import com.tian.textbook.importexport.dto.BatchStartResponse;
 import com.tian.textbook.importexport.dto.ExportPlan;
 import com.tian.textbook.importexport.dto.NoticeExportRequest;
 import com.tian.textbook.importexport.dto.OrderExportRequest;
@@ -25,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Map;
 
 /**
  * 导出中心端点（SPEC §11.5）：同步流式下载 / 异步任务轮询 + 一次性 token 下载。
@@ -41,7 +41,7 @@ public class ExportController {
     /** 教师征订明细导出（秘书本院 / 教材室全院） */
     @PostMapping("/api/admin/export/orders")
     @PreAuthorize("hasAuthority('export:order:create')")
-    public ApiResponse<BatchStartResponse> exportOrders(
+    public ApiResponse<Map<String, Object>> exportOrders(
             @RequestBody(required = false) @Valid OrderExportRequest request,
             HttpServletResponse response) throws IOException {
         Long semesterId = request == null ? null : request.semesterId();
@@ -52,7 +52,7 @@ public class ExportController {
     /** 秘书本院签字版导出（学院范围 = 当前用户 active 学期归属，W6） */
     @PostMapping("/api/secretary/export/signature")
     @PreAuthorize("hasAuthority('export:signature:create')")
-    public ApiResponse<BatchStartResponse> exportSignature(
+    public ApiResponse<Map<String, Object>> exportSignature(
             @RequestBody(required = false) @Valid SignatureExportRequest request,
             HttpServletResponse response) throws IOException {
         Long semesterId = request == null ? null : request.semesterId();
@@ -62,7 +62,7 @@ public class ExportController {
     /** 学生选购汇总（参考用量，仅教材室） */
     @PostMapping("/api/admin/export/students")
     @PreAuthorize("hasAuthority('export:student:create')")
-    public ApiResponse<BatchStartResponse> exportStudents(
+    public ApiResponse<Map<String, Object>> exportStudents(
             @RequestBody(required = false) @Valid StudentExportRequest request,
             HttpServletResponse response) throws IOException {
         Long semesterId = request == null ? null : request.semesterId();
@@ -72,7 +72,7 @@ public class ExportController {
     /** 通知汇总导出 */
     @PostMapping("/api/admin/export/notice")
     @PreAuthorize("hasAuthority('export:notice:create')")
-    public ApiResponse<BatchStartResponse> exportNotice(
+    public ApiResponse<Map<String, Object>> exportNotice(
             @RequestBody(required = false) @Valid NoticeExportRequest request,
             HttpServletResponse response) throws IOException {
         if (request == null || request.taskId() == null) {
@@ -98,10 +98,10 @@ public class ExportController {
 
     // ============ 私有 ============
 
-    private ApiResponse<BatchStartResponse> dispatch(ExportPlan plan, HttpServletResponse response)
+    private ApiResponse<Map<String, Object>> dispatch(ExportPlan plan, HttpServletResponse response)
             throws IOException {
         if (plan.async()) {
-            return ApiResponse.ok(new BatchStartResponse(plan.taskId()));
+            return ApiResponse.ok(Map.of("taskId", plan.taskId(), "async", true, "rowEstimate", plan.rowEstimate()));
         }
         DownloadSupport.attachXlsx(response, plan.fileName());
         exportService.writeSync(plan.bizType(), plan.params(), response.getOutputStream());

@@ -2,6 +2,7 @@
 
 > 依据：PRD.md V1.1.0 / SPEC.md V1.0.0 / 03-后端开发计划与决策.md v3
 > 本文说明本次 MVP 已实现的功能范围、因 MVP 裁剪暂未包含的功能点、以及与文档的落地偏差。
+> **前后端联调接口手册见仓库根 [API.md](../API.md)**（92 端点、权限码、错误码、关键流程、联调注意事项）。
 
 ## 一、实现范围（对照 PRD 功能列表）
 
@@ -121,6 +122,8 @@
 6. **未配置微信密钥时订阅消息记 `unauthorized`**：与 W5/R10「未授权者≈未授权名单、如实落库」的口径一致；配置 `WX_MINIAPP_APPID/SECRET/WX_SUBSCRIBE_TEMPLATE_ID` 后自动生效。
 7. **审计写入分两种事务语义**：关键动作（审批/切换/复核/配置/账号/窗口）与业务操作同事务（REQUIRED）；登录/导出等无业务事务场景由 `@AuditLog` 切面独立事务写入（失败不影响业务）。
 8. **前端路径以 OpenAPI 为准**：web 端现用 `/export-tasks/{id}`，服务端按 SPEC §11 契约 `/api/export-task/{id}`（02 号文档注明前端路径为提议值，以冻结契约为准）。
+9. **导出异步返回统一为 `{taskId, async:true, rowEstimate}`**：导出中心与供货商导出两条链路字段一致（此前导出中心复用 `{batchId}` 字段承载 taskId，易与导入批次混淆，已在联调前统一）。
+10. **不下发服务器文件路径**：`export_task.file_path`、`import_batch.file_path/error_file_path` 标记 `@JsonIgnore`，响应仅给出 `downloadToken`/批次 id 等前端所需信息。
 
 ## 四、验证结果
 

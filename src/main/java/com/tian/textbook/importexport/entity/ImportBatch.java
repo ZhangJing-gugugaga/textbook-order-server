@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -28,6 +29,8 @@ public class ImportBatch {
 
     private String fileName;
 
+    /** 服务器内部路径：不下发前端（@JsonIgnore） */
+    @JsonIgnore
     private String filePath;
 
     private Integer total;
@@ -44,6 +47,8 @@ public class ImportBatch {
     @TableField(value = "error_detail", typeHandler = JacksonTypeHandler.class)
     private List<Map<String, Object>> errorDetail;
 
+    /** 服务器内部路径：不下发前端（@JsonIgnore） */
+    @JsonIgnore
     private String errorFilePath;
 
     /** 异动批次号（与 change_request.batch_no 对应） */
