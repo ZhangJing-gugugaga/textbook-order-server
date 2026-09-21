@@ -3,9 +3,24 @@ logs/
 *.log
 target/
 .env
+.env.*
 # 数据导出/导入临时目录
 data/
 # IDE
 .idea/
 *.iml
 .vscode/
+
+# 凭据类文件（安全扫描 SEC 建议：防止误提交）
+.env.local
+.env.production
+.env.development
+.npmrc
+.pypirc
+.htpasswd
+id_rsa
+id_ed25519
+
+# rpd 状态备份与生成器暂存（本地安全网，不入库）
+.state-backups/
+.rpd/.code-map.tmp/
