@@ -61,6 +61,8 @@ E:	ools\mysql-local.bat start      :: 启动（stop / status / client / logs）
 | `TEXTBOOK_LOG_DIR` | 日志目录（默认 `./logs`） |
 | `TEXTBOOK_CORS_ORIGINS` | 跨域来源白名单（逗号分隔完整 origin，默认空 = 不返回 CORS 头；严禁 `*`） |
 | `TEXTBOOK_TRUSTED_PROXIES` | 可信反向代理 IP（默认空 = 不采信 `X-Forwarded-For`；同机 Nginx 填 `127.0.0.1,::1`） |
+| `TEXTBOOK_SECURITY_LOGIN_RATE_PER_MINUTE` | 登录/首登校验限频（次/分钟，默认 10）。**联调/压测必调大**（否则很快撞 429 `RATE_LIMITED`） |
+| `TEXTBOOK_SECURITY_LOGIN_MAX_FAIL` | 连续失败锁定阈值（默认 5，锁 15 分钟且计数落库、重启不清）。压测负例时一并调大 |
 | `SPRINGDOC_ENABLED` | 是否开放 `/swagger-ui.html` 与 `/v3/api-docs`（默认 false，仅 local 默认开） |
 | `TZ` | `Asia/Shanghai`（业务时间已统一走 `AppTime`，此项作第三方库兜底） |
 | `SPRING_PROFILES_ACTIVE` | **必填**：local / trial / school |

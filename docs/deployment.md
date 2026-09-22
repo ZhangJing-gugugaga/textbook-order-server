@@ -78,6 +78,8 @@ SPRING_PROFILES_ACTIVE=trial
 - `TEXTBOOK_CORS_ORIGINS` 为空 = 不返回任何 CORS 响应头（Web 走 Nginx 同域反代，小程序端不受 CORS 约束）。**严禁配置为 `*`**。
 - `TEXTBOOK_TRUSTED_PROXIES` 为空 = 完全不采信 `X-Forwarded-For`，客户端 IP 取 `remoteAddr`。同机 Nginx 部署填 `127.0.0.1,::1`；否则登录限频与审计 IP 可被伪造，且可用 5 次失败锁死任意账号（含超管）。
 - `SPRINGDOC_ENABLED` 默认 `false`（仅 `local` profile 默认开启）。
+- `TEXTBOOK_SECURITY_LOGIN_RATE_PER_MINUTE` 默认 `10`（次/分钟，按 IP+账号）。**联调/压测环境必须调大**（如 `200`）：多角色反复走查会在几分钟内撞 429 `RATE_LIMITED`。
+- `TEXTBOOK_SECURITY_LOGIN_MAX_FAIL` 默认 `5`：连续失败即锁定 15 分钟，且**失败计数落库、重启不清**；压测负例（错误口令）时一并调大。
 - `/actuator/health` 已开放用于探活；其余 actuator 端点未暴露。
 
 ## 4. systemd 守护（/etc/systemd/system/textbook-order-server.service）

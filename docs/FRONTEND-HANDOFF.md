@@ -65,7 +65,7 @@ POST /api/admin/order-forms/{id}/review
 `reviewed` 是**终态**（PRD 状态机退出条件为"—"）。此前教师重提会把已通过审核的表单覆盖回
 `pending_review` 并清空审核记录（静默撤销审批结论），现已拦截：**再提交返回 409**。
 
-**前端**：`status=reviewed` 时隐藏/禁用"提交/修改"按钮，文案引导"如需修改请联系教材室驳回后补正"。
+**前端**：`status=reviewed` 时隐藏/禁用"提交/修改"按钮。**文案不要写"如需修改请联系教材室驳回后补正"**——`reviewed` 是终态，审核接口只接受 `pending_review`，教材室在系统内同样驳不回（对 `reviewed` 再审核返回 409「已通过审核（终态），不能再次审核」）。建议改为"已通过审核，如需变更请联系教材室线下处理"。
 
 ### A5. 归属失败的语义统一为 **404**（不再是 403）
 
@@ -73,6 +73,7 @@ POST /api/admin/order-forms/{id}/review
 |------|------|------|
 | `GET /api/export-task/{id}` | 非本人任务 | **404** `NOT_FOUND` |
 | `GET /api/export-task/{id}/download` | 非本人任务 | **404** |
+| `GET /api/export-task/{id}` | `bizType=supplier` 的任务（即使**本人**创建） | **404**（2026-09-22 起：供货商任务只走 `/api/supplier/export-task/**`，隔离是双向的；ADMIN 例外以便排障） |
 | `GET /api/supplier/export-task/{id}` | 非本人 或 非 `bizType=supplier` | **404** |
 | `GET /api/batch/{batchId}`、`/errors` | 非本人批次 | **404** |
 
@@ -98,9 +99,35 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
    token 就没了，必须**重新导出**（不要原地重试同一个 token）；
 4. 失效情形都返回 **410 `DOWNLOAD_TOKEN_INVALID`**：token 复用、token 过期（默认 10 分钟）、
    文件超出保留期（默认 24 小时）；
-5. `filePath`（服务器内部路径）**永不下发**；`paramsJson` 会下发（含 semesterId/collegeId）。
+5. `filePath`（服务器内部路径）**永不下发**；`paramsJson` 会下发（含 semesterId/collegeId）；
+6. **轮询端点按角色固定**：内部用户（超管/秘书）用 `/api/export-task/{id}`，供货商**必须**用
+   `/api/supplier/export-task/{id}`——2026-09-22 起内部端点对 `bizType=supplier` 的任务返回 404
+   （双向物理隔离）。`/api/supplier/export` 的异步受理体现在也是 `{taskId, async, rowEstimate}`，
+   与其余四类同形，可统一处理（不再需要靠 Content-Type 猜测）。
 
-### A7. 新增两类协议错误码
+### A7. 时间入参：两种格式都接受（不再有 body/query 分叉）
+
+此前 `spring.mvc.format.date-time` 只作用于 MVC 参数绑定：**body 只认 ISO 的 `T`、query 只认空格格式**，
+传错格式一律 400，且文案只有"请求参数有误"。现在两侧统一（`TimeFormats`）：
+
+| 位置 | 接受 |
+|------|------|
+| body（如窗口设置 `windowStart/windowEnd`） | `2026-09-21T09:30:00`、`2026-09-21 09:30:00`、缺秒 `09:30` |
+| query（如审计 `startAt/endAt`） | 同上，另接受纯日期 `2026-09-21`（`startAt` 取当日 00:00:00、`endAt` 取当日 23:59:59.999999999） |
+| 出参 | 恒为 ISO-8601（`2026-09-21T09:30:00`），与入参格式无关 |
+
+格式确实非法时返回 400 `PARAM_INVALID`，`data` 会指明字段与可接受格式：
+`["windowStart: 时间格式应为 ISO-8601（2026-09-21T09:30:00）或 yyyy-MM-dd HH:mm:ss"]`。
+
+### A8. 学期切换/归档不可逆（确认弹窗必须写明）
+
+`POST /api/admin/semester/{id}/activate` 会归档旧 active 学期，`POST /{id}/archive` 会把当前学期置为只读，
+**两者都没有回退接口**：`archived` 学期不能再激活（返回 409「归档不可逆」），也没有 active→draft 的路径。
+
+前端确认弹窗请写明"**此操作不可撤销**"（现有文案只说了"同一时刻仅有一个 active 学期""归档后不可再填报"）。
+另外：**不要拿真实学期的 activate/archive 做冒烟验证**，归档后只能由 DBA 改库恢复。
+
+### A9. 两类协议错误码
 
 | code | HTTP | 场景 |
 |------|------|------|
@@ -153,6 +180,15 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
   TEXTBOOK_CORS_ORIGINS=http://localhost:5173
   ```
 
+### 联调期必调的两项（否则走查必然撞限流）
+
+| 环境变量 | 默认 | 说明 |
+|----------|------|------|
+| `TEXTBOOK_SECURITY_LOGIN_RATE_PER_MINUTE` | 10 | 登录/首登校验限频（按 IP+账号，1 分钟粒度）。多角色反复走查会在几分钟内撞 **429 `RATE_LIMITED`**；联调/压测建议调到 200+ |
+| `TEXTBOOK_SECURITY_LOGIN_MAX_FAIL` | 5 | 连续失败 5 次即锁定 15 分钟，且**失败计数落库、重启不清**（锁定期间 401 `ACCOUNT_LOCKED`）。压测负例（错误口令）时请一并调大 |
+
+> 说明：这两项是**进程内**限频/锁定（多实例部署各自计数），联调环境直接改环境变量重启即可，不需要改库。
+
 ---
 
 ## D. 已知限制（后端侧，前端需容忍）
@@ -165,7 +201,9 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
 | 导入错误明细保留期 | 文件保留 24 小时后清理，之后下载 404；文案会区分"该批次没有错误明细"与"错误明细文件已过期清理（保留 24 小时）" |
 | 供货商清单行数上限 | `GET /api/supplier/orders` 上限 20000 行（超出截断并记日志），超出场景请用导出 |
 | 供货商历史批次 | 升级前的历史导入批次 `created_by` 为 NULL，对非 ADMIN 按 404 处理（有意的 fail-closed 选择） |
+| 班级人数以名单为准 | 学生名单导入会把 `school_class.studentCount` 重算为**文件内该班去重学生数**（教师征订数量上限的来源）。**局部名单会把上限改小**（只放 1 行 → 上限变 1，教师提交会被 `QTY_RANGE` 拦住）。导入摘要的 `classSizeShrinks` 与 WARN 日志会记录下调；需修正时用 `PUT /api/admin/class/{id}` |
 | 微信订阅消息 | 未配置模板 id 时 `notice_record` 如实记 `unauthorized`；弹窗通道不受影响 |
+| 联调夹具无法用接口清理 | 联调产生的 `[IT]` 前缀学院/专业/班级/课程/教材/账号没有删除接口（组织三表与教材为严格模式，防误删），只能由 DBA 按前缀清理；每轮联调还会新建 1 个 draft 夹具学期 |
 
 ---
 
