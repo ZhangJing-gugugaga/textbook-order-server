@@ -173,6 +173,29 @@ set -a; . ./.env.local; set +a        # 仓库根目录的本地环境变量（.
 > 三者均已幂等（`CREATE TABLE IF NOT EXISTS` + `ON DUPLICATE KEY UPDATE`），可反复重启。
 > 生产/试运行**不要**用 `local` profile（见 §3.1）。
 
+### 5.2 本地全量验证（无需 Docker）
+
+本机无 Docker 时，用本地 MySQL 完成「全量后端验证」的两条命令：
+
+```bash
+# 1) 全量自动化测试（含真实 MySQL 原生 DDL / 生成列唯一约束 / 迁移脚本幂等）
+./mvnw test -Dmysql.local.enabled=true
+#    不加 -Dmysql.local.enabled=true 时，MySQL 用例自动跳过（CI 无 MySQL 也能跑）
+
+# 2) 端到端冒烟（5 角色主流程 + 安全负例，需应用已启动）
+bash scripts/e2e-smoke.sh            # 默认 http://127.0.0.1:8080
+```
+
+- `LocalMySqlIntegrationTest`（9 例）替代 Testcontainers 的验证职责：原生 DDL 建表、
+  JSON 列与 DATETIME(3) 精度、**三个生成列唯一约束**（`uk_semester_active` /
+  `uk_task_active` / `uk_notice_confirm`）、种子脚本幂等、迁移脚本幂等与「补齐被删对象」、
+  方言敏感 SQL 直跑。使用独立库 `textbook_verify`，不触碰开发库 `textbook_order`。
+- `scripts/e2e-smoke.sh`（45 项断言）覆盖：ADMIN/TEACHER/STUDENT/SECRETARY/SUPPLIER
+  五角色主流程、S3 审核版本号 CAS（过期版本必须 409）、F3 供货商越权负例、
+  S23 通知定向、S18 协议边界（401/405/415/400）、R5 分页上限、S24 CORS、R1 失败锁定。
+- 磁盘：测试 JVM 的 `java.io.tmpdir` 已在 pom 中指向 `target/tmp`，
+  不再写入系统盘用户 Temp 目录（单轮约 13~26MB）。
+
 ## 6. 备份（每日 02:00 全量，保留 14 天，W22）
 
 `/opt/textbook/backup.sh`：
