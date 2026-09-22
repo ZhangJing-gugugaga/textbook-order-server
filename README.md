@@ -17,7 +17,7 @@ Java 17 · Spring Boot 3.3.13 · MyBatis-Plus 3.5.7 · MySQL 8.0.36+ · EasyExce
 mysql -uroot -p -e "CREATE DATABASE textbook_order DEFAULT CHARSET utf8mb4;"
 
 # 2) 本地 profile 启动（自动执行 db/schema.sql + data-permission.sql + data-seed.sql）
-export DB_URL='jdbc:mysql:<SECRET_824596b7>'
+export DB_URL='jdbc:mysql://127.0.0.1:3306/textbook_order?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true'
 export DB_USERNAME=root DB_PASSWORD=root
 export JWT_SECRET='请替换为至少32字节随机串（openssl rand -base64 48）'
 export SPRING_PROFILES_ACTIVE=local      # 必填：无默认 profile，缺失即启动失败
@@ -99,7 +99,9 @@ E:	ools\mysql-local.bat start      :: 启动（stop / status / client / logs）
 ## 测试
 
 ```bash
-./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检（187 用例）
+./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检（238 用例）
+./mvnw test -Dmysql.local.enabled=true   # 追加本地 MySQL 真库用例（共 241 用例，需先起 E:	ools\mysql-local.bat）
+bash scripts/smoke-isolated.sh            # 端到端冒烟：一次性库 + 独立端口，可重复执行（45 项断言）
 ./mvnw test -Drun.mysql.tests=true   # Docker 可用时追加 Testcontainers(MySQL) 集成用例
 ```
 

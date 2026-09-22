@@ -8,10 +8,25 @@
 ## 2. 数据库初始化（DBA 执行，按顺序）
 
 ```bash
-mysql -uroot -p textbook_order < src/main/resources/db/schema.sql          # 全量 DDL（IF NOT EXISTS，可重复执行）
-mysql -uroot -p textbook_order < src/main/resources/db/data-permission.sql # 37 条权限码 + 五角色映射
+# ① 建库 + 建应用账号（应用用这个账号连库，不是 root；口令与 /etc/textbook/env 的 DB_PASSWORD 一致）
+mysql -uroot -p <<'SQL'
+CREATE DATABASE IF NOT EXISTS textbook_order DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+CREATE USER IF NOT EXISTS 'textbook'@'localhost' IDENTIFIED BY '<强口令>';
+-- ALTER/INDEX 供存量库迁移脚本使用（§2.1）；不需要 DROP/GRANT 权限
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON textbook_order.* TO 'textbook'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+
+# ② 建表 + 权限码（用应用账号执行即可）
+mysql -utextbook -p textbook_order < src/main/resources/db/schema.sql          # 全量 DDL（IF NOT EXISTS，可重复执行）
+mysql -utextbook -p textbook_order < src/main/resources/db/data-permission.sql # 37 条权限码 + 五角色映射
 # data-seed.sql 仅用于本地/演示环境（内含已知口令的测试账号），严禁在生产执行
 ```
+
+> **漏了 ① 的后果**：`DB_USERNAME=textbook` 但库中无该账号 → Hikari 启动即 `Access denied`，
+> systemd 每 5s 重启一次、永远起不来（`Restart=always`）。
+> 初始化完成后用 `SELECT user_no FROM sys_user WHERE user_no IN ('900001','800101','700101','20230101','600001');`
+> 确认**没有**演示账号（若曾用 local profile 误连生产库，必须立即改口令或删号）。
 
 > 本地开发：`SPRING_PROFILES_ACTIVE=local` 启动会自动按上述顺序初始化（仅限全新空库）。
 > 生产/试运行不要执行 `data-seed.sql`。
@@ -47,7 +62,7 @@ mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-21.sql
 ## 3. 环境变量（/etc/textbook/env，systemd EnvironmentFile）
 
 ```ini
-DB_URL=jdbc:mysql:<SECRET_824596b7>
+DB_URL=jdbc:mysql://127.0.0.1:3306/textbook_order?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
 DB_USERNAME=textbook
 DB_PASSWORD=<强密码>
 JWT_SECRET=<openssl rand -base64 48 生成，≥32字节>
@@ -84,6 +99,19 @@ SPRING_PROFILES_ACTIVE=trial
 
 ## 4. systemd 守护（/etc/systemd/system/textbook-order-server.service）
 
+先建目录与产物（**漏了这步启动自检会中止**：导出目录不可写）：
+
+```bash
+# 目录 + 属主（服务以 www-data 运行）
+sudo mkdir -p /opt/textbook/data/export /opt/textbook/backup /var/log/textbook
+sudo chown -R www-data:www-data /opt/textbook /var/log/textbook
+
+# 构建并放置可执行 jar（在开发机或服务器上，仓库根目录执行）
+./mvnw clean package -DskipTests
+sudo cp target/textbook-order-server.jar /opt/textbook/app.jar
+sudo chown www-data:www-data /opt/textbook/app.jar
+```
+
 ```ini
 [Unit]
 Description=textbook-order-server
@@ -103,8 +131,9 @@ RestartSec=5
 # 优雅停机：先停收新请求，等待在途请求与异步导入/导出收尾（最长 30s）
 KillSignal=SIGTERM
 TimeoutStopSec=45
-StandardOutput=append:/var/log/textbook/app.log
-StandardError=append:/var/log/textbook/app.log
+# 日志只走 logback（/var/log/textbook/textbook-order-server.log，按天 + 50MB 轮转、保留 30 天）。
+# 不要在这里再 append 一份：那会让每行日志写两遍，且 systemd 的 append 不做轮转，
+# 最终把磁盘写满 → health 因 diskspace DOWN、导入导出全部失败。
 
 [Install]
 WantedBy=multi-user.target
@@ -184,8 +213,12 @@ set -a; . ./.env.local; set +a        # 仓库根目录的本地环境变量（.
 ./mvnw test -Dmysql.local.enabled=true
 #    不加 -Dmysql.local.enabled=true 时，MySQL 用例自动跳过（CI 无 MySQL 也能跑）
 
-# 2) 端到端冒烟（5 角色主流程 + 安全负例，需应用已启动）
-bash scripts/e2e-smoke.sh            # 默认 http://127.0.0.1:8080
+# 2) 端到端冒烟（推荐：一次性库 + 独立端口，可重复执行、不碰演示库）
+bash scripts/smoke-isolated.sh
+
+# 3) 若应用已在 8080 运行，也可直接对着它跑（必须声明目标库）
+SMOKE_DB=textbook_smoke bash scripts/e2e-smoke.sh          # 一次性库
+SMOKE_DB=textbook_order ALLOW_SHARED_DB=1 bash scripts/e2e-smoke.sh   # 共享库（见下）
 ```
 
 - `LocalMySqlIntegrationTest`（9 例）替代 Testcontainers 的验证职责：原生 DDL 建表、
@@ -195,10 +228,51 @@ bash scripts/e2e-smoke.sh            # 默认 http://127.0.0.1:8080
 - `scripts/e2e-smoke.sh`（45 项断言）覆盖：ADMIN/TEACHER/STUDENT/SECRETARY/SUPPLIER
   五角色主流程、S3 审核版本号 CAS（过期版本必须 409）、F3 供货商越权负例、
   S23 通知定向、S18 协议边界（401/405/415/400）、R5 分页上限、S24 CORS、R1 失败锁定。
+- **为什么冒烟要对着一次性库跑**（`scripts/smoke-isolated.sh`）：脚本会真实提交并
+  **审核通过**一张征订单（`reviewed` 是终态、系统不提供撤销审核），还会改动账号锁定状态与
+  班级人数；而组织/账号等表是严格模式、**没有删除接口**。对着演示库跑，第二轮就必然失败，
+  并留下 `[IT]` 夹具（只能 DBA 按前缀清理）。一次性库把「清理」变成「重建」，从根上消除该问题。
 - 磁盘：测试 JVM 的 `java.io.tmpdir` 已在 pom 中指向 `target/tmp`，
   不再写入系统盘用户 Temp 目录（单轮约 13~26MB）。
 
+#### 5.2.1 一次性测试环境的几种业界做法（选型参考）
+
+调研结论（官方文档与维护者讨论为主）：一次性环境是共识，差异只在「用容器还是用库」。
+本项目因**开发机无 Docker** 采用「一次性 schema」路线；有 Docker 时应升级到 Testcontainers。
+
+| 做法 | 说明 | 适配情况 |
+|------|------|----------|
+| Testcontainers `MySQLContainer` + Spring Boot `@ServiceConnection` | 每次测试起一个真实 MySQL 容器，Spring Boot 3.1+ 免去 `@DynamicPropertySource` 样板 | **需要 Docker**（本机不可用；`MySqlContainerIntegrationTest` 已按 `-Drun.mysql.tests=true` 门控保留，换机即启用） |
+| 一次性 schema / database（本项目采用） | 运行前 `DROP/CREATE DATABASE` + 指向它的 `DB_URL`，跑完即弃；与 Testcontainers 思路一致但不需要容器 | ✅ 已落地为 `scripts/smoke-isolated.sh`；`LocalMySqlIntegrationTest` 早先已用 `textbook_verify` 库验证同一机制 |
+| 测试事务回滚（`@Transactional` + 默认 rollback） | 同线程、同事务管理器时最省事 | ⚠️ 只适合同线程服务层测试；异步导入/导出、`REQUIRES_NEW`（登录失败计数/审计）**不会被回滚**，本仓库的 H2 套件继续用「逐用例清表」更稳 |
+| 声明式夹具生命周期（`@Sql` 的 `BEFORE/AFTER_TEST_METHOD`、Database Rider `@DataSet(cleanBefore/cleanAfter)`） | 把「建夹具/清夹具」写进注解，`skipCleaningFor` 可保护共享表 | ⚠️ 官方文档未明确保证测试失败时 `AFTER_TEST_METHOD` 仍执行，清理不应作为唯一保障 |
+| 前缀标记 + 定期清理（`[IT]%` + SQL/事件调度） | 数据必须留在共享库时的兜底 | ⚠️ 无官方模式；且本仓库严格模式禁删除接口，仅适合 DBA 手工 SQL |
+| 每次运行新起整套栈（docker compose / CI service containers / Spring Boot 官方 smoke-test 模块） | 最彻底，CI 里最常用 | 需要 Docker/CI；作为后续 CI 化目标 |
+
+参考链接：Testcontainers MySQL 模块 <https://java.testcontainers.org/modules/databases/mysql/> ·
+Spring Boot Testcontainers 支持 <https://docs.spring.io/spring-boot/3.3/reference/testing/testcontainers.html> ·
+Spring 并行测试与共享服务的官方告诫 <https://docs.spring.io/spring-framework/reference/testing/testcontext-framework/parallel-test-execution.html> ·
+`@Sql` 执行时机 <https://docs.spring.io/spring-framework/reference/testing/testcontext-framework/executing-sql.html> ·
+Database Rider 数据集清理 <https://database-rider.github.io/database-rider/latest/documentation.html> ·
+GitHub Actions service containers <https://docs.github.com/en/actions/using-containerized-services/about-service-containers> ·
+Spring Boot 官方 `smoke-test/` 模块 <https://github.com/spring-projects/spring-boot/tree/main/smoke-test>。
+
+> 试运行库（真实数据）与开发机演示库**永远不要**跑冒烟脚本：脚本会改账号锁定与班级人数。
+> 需要验证试运行环境时，用 `scripts/smoke-isolated.sh` 起一次性库，或只跑只读断言。
+
 ## 6. 备份（每日 02:00 全量，保留 14 天，W22）
+
+先建凭据文件（cron 没有 TTY，`mysqldump` 不能靠交互输口令；**照抄 `-uroot` 不带口令的脚本会每天生成一个空备份**）：
+
+```bash
+sudo install -m 600 -o root -g root /dev/null /etc/textbook/.my.cnf
+sudo tee /etc/textbook/.my.cnf >/dev/null <<'EOF'
+[client]
+user=textbook
+password=<DB_PASSWORD>
+host=127.0.0.1
+EOF
+```
 
 `/opt/textbook/backup.sh`：
 
@@ -208,21 +282,51 @@ set -euo pipefail
 DIR=/opt/textbook/backup
 KEEP_DAYS=14
 STAMP=$(date +%Y%m%d-%H%M%S)
-mysqldump --single-transaction --quick --routines -uroot textbook_order \
-  | gzip > "$DIR/textbook_order-$STAMP.sql.gz"
+mkdir -p "$DIR"
+FILE="$DIR/textbook_order-$STAMP.sql.gz"
+
+mysqldump --defaults-extra-file=/etc/textbook/.my.cnf --single-transaction --quick --routines \
+  --default-character-set=utf8mb4 textbook_order | gzip > "$FILE"
+
+# 空/过小的备份视为失败（gzip 会为 0 字节输入生成合法但不可恢复的 .gz，必须显式拦截）
+SIZE=$(stat -c %s "$FILE")
+if [ "$SIZE" -lt 10240 ]; then
+  echo "备份失败：$FILE 仅 $SIZE 字节" >&2
+  rm -f "$FILE"
+  exit 1
+fi
 find "$DIR" -name 'textbook_order-*.sql.gz' -mtime +$KEEP_DAYS -delete
+echo "备份完成：$FILE ($SIZE 字节)"
 ```
 
 ```bash
-chmod +x /opt/textbook/backup.sh
+sudo chmod +x /opt/textbook/backup.sh
 crontab -l 2>/dev/null | { cat; echo "0 2 * * * /opt/textbook/backup.sh >> /var/log/textbook/backup.log 2>&1"; } | crontab -
 ```
 
-恢复：`gunzip -c textbook_order-YYYYMMDD-HHMMSS.sql.gz | mysql -uroot textbook_order`
+**恢复**（先停服务，避免恢复过程中表被 DROP 引发 500）：
+
+```bash
+sudo systemctl stop textbook-order-server
+gunzip -c /opt/textbook/backup/textbook_order-YYYYMMDD-HHMMSS.sql.gz \
+  | mysql --defaults-extra-file=/etc/textbook/.my.cnf textbook_order
+sudo systemctl start textbook-order-server
+curl -s localhost:8080/actuator/health   # 期望 {"status":"UP"}
+```
+
+> **上线前必须演练一次**：恢复到临时库（`CREATE DATABASE textbook_restore; ... textbook_restore`）并核对
+> `sys_user` 账号数、`sys_role_permission` 权限码数、`semester` 的 active 学期、`system_config` 8 键。
+> 未演练过的备份等于没有备份（空 .gz 只有恢复时才会暴露）。
 
 ## 7. 移交检查单（SPEC §15）
 
 - [ ] 环境变量清单交接（§3）
+- [ ] 数据库与应用账号已创建并授权（§2 ①；`DB_USERNAME` 对应的账号存在且有 ALTER/INDEX 权限）
+- [ ] 目录与产物就位（§4：`/opt/textbook{,/data/export,/backup}`、`/var/log/textbook`、`app.jar`）
+- [ ] 启动日志确认三行自检通过（profile / 导出目录 / **可信反向代理已生效**）；
+      `TEXTBOOK_TRUSTED_PROXIES` 配好后必须看到「可信反向代理已生效: …」，否则审计 IP 恒为 127.0.0.1
+- [ ] `SPRING_PROFILES_ACTIVE` 为 `trial` 或 `school`（**不是** `local`；local 连非本机库会被启动自检拒绝）
+- [ ] 备份已跑通并**演练过一次恢复**（§6；空 .gz 会在恢复时才暴露）
 - [ ] `schema.sql` + `data-permission.sql` 初始化（§2；**不执行** `data-seed.sql`）
 - [ ] 存量库已执行 `migration-2026-09-21.sql` 并跑完脚本末尾的验证 SQL（§2.1）
 - [ ] `TEXTBOOK_ASYNC_RECOVER` 与实例数一致（单实例默认 true；多实例须置 false）
@@ -250,6 +354,17 @@ crontab -l 2>/dev/null | { cat; echo "0 2 * * * /opt/textbook/backup.sh >> /var/
   + `window_status=closed`），数据只读保留、可查可导（D2-A）
 - 备份恢复演练：建议每学期至少一次（`gunzip -c ... | mysql`），恢复后校验
   `semester` 的 active 学期与 `system_config` 一致
+- **账号被锁定（401 `ACCOUNT_LOCKED`）**：连续 5 次错误口令锁定 15 分钟，且**计数落库、重启不清**。
+  锁定只影响该账号（可用其它超管账号登录）。解锁：
+  `UPDATE sys_user SET fail_count = 0, lock_until = NULL WHERE user_no = '<工号>';`
+  若工号可被外人猜到（学号/工号是公开信息），建议把 `TEXTBOOK_SECURITY_LOGIN_MAX_FAIL` 调大，
+  或由教材室先确认无人恶意尝试再解锁。
+- **停机预算**：`spring.lifecycle.timeout-per-shutdown-phase=30s` < systemd `TimeoutStopSec=45s` <
+  异步池 `awaitTerminationSeconds=60`。万行导入实测约 3 分钟，**停机时正在跑的导入会被中断**
+  （启动补偿会把它置 `failed`；已提交的分批数据保留，重新导入是幂等 upsert，可收敛）。
+  发版请避开导入/导出高峰，或先确认没有 `running` 批次。
+- **登录限频**：默认 10 次/分钟（按 IP+账号），试运行前按预期并发调大
+  （`TEXTBOOK_SECURITY_LOGIN_RATE_PER_MINUTE`），否则集中首登期会大面积 429。
 - 多实例部署前：定时任务（窗口扫描/通知重发/导出清理）、登录限频与角色缓存
   （Caffeine 进程内）、`SEMESTER_LOCK`（JVM 级锁）都需换分布式锁/外置缓存或 xxl-job（R3）；
   **并须把 `TEXTBOOK_ASYNC_RECOVER=false`**——启动补偿按「`updated_at` 早于本进程启动时刻」

@@ -1,7 +1,7 @@
 # 架构与接口审查修复记录（2026-09-21）
 
 > 依据：架构与接口设计审查报告（P0 5 项 / P1 25 项 / P2 若干 / P3 建议项）+ 第二轮复验报告（R1–R9）。
-> 结果：**208 用例全绿**（首轮修复前 164），`mvnw package` 通过，启动自检四条路径实跑验证，
+> 结果：**208 用例全绿**（首轮修复前 164；后续联调修复轮次已增至 241），`mvnw package` 通过，启动自检四条路径实跑验证，
 > 迁移脚本的 ALTER 语句在模拟旧库上实跑通过。
 > 变更规模：约 115 个文件。
 >
@@ -198,6 +198,7 @@ throw new BizException(ErrorCode.LOGIN_FAILED);
 ## 5. 验证方式
 
 - `./mvnw test`：**208 用例通过 / 3 跳过**（Testcontainers 需 Docker）。
+  （该数字为本文档成文时的口径；当前基线见 README「测试」一节。）
 - 新增回归用例：
   - `unit/auth/JwtServiceSecretTest`（5）：密钥四类非法值 + 往返签发解析。
   - `unit/common/RequestUtilTest`（6）：可信代理 XFF 解析 4 场景 + LIKE 转义。

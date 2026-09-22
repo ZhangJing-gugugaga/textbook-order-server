@@ -1,6 +1,6 @@
 # 教材征订系统 · 服务端 API 手册
 
-> 版本 V1.0.5 · 2026-09-22 · 依据 `SPEC.md` §11 契约基线（95 个端点；V1.0.1–3 联调新增 3 个最小权限只读端点）
+> 版本 V1.0.6 · 2026-09-22 · 依据 `SPEC.md` §11 契约基线（95 个端点；V1.0.1–3 联调新增 3 个最小权限只读端点）
 > 定位：**前后端联调速查手册**。唯一契约源为 springdoc-openapi 生成的 OpenAPI 3 文档（`GET /v3/api-docs`、`/swagger-ui.html`），本文档与代码同步维护，冲突时以 OpenAPI 为准。
 > 配套文档：[README.md](README.md)（环境/账号/测试）、[docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)（实现范围与裁剪）、[docs/deployment.md](docs/deployment.md)（部署）
 
@@ -17,7 +17,7 @@
 | 请求头 | `Authorization: Bearer <accessToken>`；`Content-Type: application/json`（上传为 `multipart/form-data`）；可选 `X-Device-Id`（refresh 轮换的会话标识） |
 | 字符集 | UTF-8 |
 | 时间格式 | **入参**（body 与 query 一致）：`2026-09-21T09:30:00`（ISO-8601，推荐）与 `2026-09-21 09:30:00`（含缺秒 `09:30`）**都接受**，时区固定 Asia/Shanghai；审计查询的 `startAt/endAt` 另接受纯日期 `2026-09-21`（下界取当日 00:00:00，上界取当日 23:59:59.999999999）。**出参**：ISO-8601 本地日期时间（`2026-09-21T09:30:00`，含微秒时为 `2026-09-21T09:30:00.123456`）——`spring.jackson.date-format` 只作用于 `java.util.Date`，不影响 JSR-310 类型，前端需自行格式化（见 §5.10） |
-| CORS | 同域反代不需要；小程序/跨端已开启允许（合法域名白名单） |
+| CORS | **默认不返回任何 CORS 响应头**（仅同域访问；Web 走 Nginx 同域反代，小程序不受 CORS 约束）。跨域直连需设 `TEXTBOOK_CORS_ORIGINS`（显式 origin 白名单，**严禁 `*`**，配了 `*` 直接启动失败） |
 
 ### 1.2 统一响应包络
 
@@ -192,7 +192,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | POST | `/api/auth/login` | 公开 | 登录 → access+refresh+角色+首登状态 |
 | POST | `/api/auth/refresh` | 凭 refresh | 轮换 refresh，返回新 access + 新 refresh |
 | POST | `/api/auth/logout` | 登录 | 撤销本人全部 refresh |
-| POST | `/api/auth/first-login/verify` | 待改密 | 首登校验（手机号后 4 位 / wxCode 换 openid） |
+| POST | `/api/auth/first-login/verify` | 待改密 | 首登校验（`{phoneTail}` 手机号后 4 位，或 `{wxCode}` **校验已绑定的 openid**）。**wxCode 不能新建绑定**：只带 wxCode 时仅当该账号已绑定同一 openid 才通过（否则 401 + 计入失败计数）；openid 的绑定只发生在手机号后 4 位通过之后。未填手机号的账号无法自助首登，需教材室补手机号 |
 | POST | `/api/auth/switch-role` | 登录 | 切换身份（返回新权限码集合） |
 | GET | `/api/me` | 登录 | 用户信息 + 角色列表 + 当前身份 + 授权状态 + active 学期归属 |
 | GET | `/api/me/permissions` | 登录 | 权限码列表 |
@@ -288,7 +288,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 
 > 严格模式：导入名单不会自动创建学院/班级，须先在此维护。班级人数 `studentCount` 是教师征订数量上限的来源。
 
-### 3.4 教材 / 课程 / 任课（11）
+### 3.4 教材 / 课程 / 任课（14）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
@@ -320,7 +320,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | POST | `/api/admin/user/import` | `people:student:import` / `people:teacher:import` | 名单导入：`?role=student|teacher&semesterId=`（默认 active 学期）+ multipart `file` → `{batchId}` |
 | GET | `/api/admin/user/import/template` | 同上 | `?role=student|teacher` 模板下载（学生：学号/姓名/学院/专业/班级/手机号；教师：工号/姓名/学院/手机号） |
 
-### 3.6 教师征订（教师端 4 + 复核端 4）
+### 3.6 教师征订（教师端 5 + 复核端 4）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
@@ -372,7 +372,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 
 > 校验：窗口内（`windowStatus=open` 且 `channelOpen=1`，否则 409 `WINDOW_CLOSED`）；数量 1-9 且 ≤ 班级人数；含下架教材 → 400 `BOOK_DELISTED`。提交时记录学院/班级快照（后续异动不影响历史归属）。
 
-### 3.8 异动审批（提交端 4 + 审批端 3）
+### 3.8 异动审批（提交端 4 + 审批端 4）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
@@ -457,7 +457,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | GET | `/api/admin/audit` | `audit:log:view` | 审计查询 `?userId&userNo&action&resource&startAt&endAt&page&size`（时间接受 ISO-8601 与 `yyyy-MM-dd HH:mm:ss`，另接受纯日期 `yyyy-MM-dd`：`startAt` 取当日 00:00:00、`endAt` 取当日 23:59:59.999999999 含当天整天；开始晚于结束 → 400） |
 | GET | `/api/admin/dashboard` | `dashboard:stat:view` | 看板：`{semesterId, windowStatus, channelOpen, serverTime, colleges:[{collegeId,collegeName,teacherTotal,submitted,pendingReview,reviewed,rejected}], pendingReviewTotal, unconfirmedNoticeTotal, studentOrderTotal, studentSubmittedTotal}` |
 
-**配置键清单（8）**：`notice.round_limit`(5) · `notice.interval_hours`(24) · `notice.popup_queue_max`(5) · `order.quantity.max_default`(999) · `order.correct_window_days`(7) · `export.sync_row_threshold`(5000) · `export.download_token_minutes`(10) · `import.max_file_mb`(10)。变更立即对未完结通知任务生效。
+**配置键清单（8）**：`notice.round_limit`(5) · `notice.interval_hours`(24) · `notice.popup_queue_max`(5) · `order.quantity.max_default`(999) · `order.correct_window_days`(7) · `export.sync_row_threshold`(5000) · `export.download_token_minutes`(10) · `import.max_file_mb`(10)。变更立即对未完结通知任务生效——**例外**：`notice.interval_hours` 目前只作为任务快照展示，重发由每日 09:30 的定时任务驱动，改大/改小不会改变实际发送节奏（待实现，见 .project-state.md 待确认项）。
 
 ### 3.13 供货商只读（4，物理隔离）
 
@@ -482,7 +482,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 POST /api/auth/login
   ├─ 成功且 mustChangePassword=false → 进入业务界面（GET /api/me、/api/me/permissions）
   └─ 成功且 mustChangePassword=true  → 首登引导页
-       ├─ POST /api/auth/first-login/verify  {phoneTail:"0001"}   （或 {wxCode} 小程序授权）
+       ├─ POST /api/auth/first-login/verify  {phoneTail:"0001"}   （wxCode 仅用于绑定 openid / 校验已绑定）
        └─ PUT /api/me/password {oldPassword, newPassword}
             → 返回新 access+refresh（旧 refresh 全部撤销）→ 进入业务界面
 ```
@@ -573,3 +573,4 @@ POST /api/admin/export/orders  {"semesterId":1}
 | 2026-09-22 | 契约修复（V1.0.5） | ① **时间入参两侧口径统一为「两种格式都接受」**：此前 `spring.mvc.format.date-time` 只管 MVC 参数绑定，body 由 Jackson 按 ISO 解析——联调实测「body 传 `2026-09-21 09:30:00` 直接 400、query 传 ISO 也 400」，且 400 文案只有「请求参数有误」。现由 `TimeFormatConfig`/`TimeFormats` 统一解析（ISO 与空格都接受，出参仍 ISO），时间格式错误回 400 + 逐字段提示（`["windowStart: 时间格式应为 …"]`）。② 审计查询的纯日期 `endAt` 由「当日 00:00:00」改为「当日结束」（原语义会把当天记录整体排除）。 |
 | 2026-09-22 | 契约修复（V1.0.5） | ③ **供货商导出异步受理体补齐 `async`/`rowEstimate`**（此前只有 `{taskId}`，与 §3.10 其余四类不一致，前端只能靠 Content-Type 分流）。④ **供货商任务物理隔离补齐**：内部端点 `/api/export-task/{id}` 对 `bizType=supplier` 任务返回 404（非 ADMIN），隔离变为双向（ADMIN 例外以便排障）。⑤ `reviewed` 终态文案修正：教师重提不再引导「联系教材室驳回后补正」（该路径不存在——教材室对 `reviewed` 再审核同样 409），改为如实说明终态；管理员重复审核文案由「请刷新后重试」改为「已通过审核（终态），不能再次审核」。⑥ 学期 `activate`/`archive` 明确不可逆（归档后不能再次激活，文案含「归档不可逆」）。 |
 | 2026-09-22 | 语义明确（V1.0.5） | ⑦ **班级人数（W2）以名单为准**：学生名单导入把 `school_class.studentCount` 重算为文件内该班**去重**学生数（此前按行数计数，同学号重复行会放大上限）；导入摘要新增 `classSizeUpdates`/`classSizeShrinks` 并下调时记 WARN——局部名单会把教师数量上限改小，需人工确认是否用 `PUT /api/admin/class/{id}` 修正。 |
+| 2026-09-22 | 上线前复审修复（V1.0.6） | ① **窗口变更重置轮次撞唯一键**：`onWindowChange` 的逻辑删除语句漏 `deleted=0`，第二次窗口变更（重发之后）会撞 `uk_notice_round` → 整个变更事务回滚，自动截止每分钟重试每分钟失败，**窗口再也关不上**（延长/提前截止同样失败）。② **教师提交与审核并发**：提交侧只有「读后判断」，与审核并发时会把 `reviewed` 静默改回 `pending_review`（审批结论被撤销，audit_log 却留着已审核）——提交事务内改为对该表单行加锁并重读状态（`selectByIdForUpdate`）。③ **编辑学期基本信息回写整实体**：会把 `window_status/channel_open/version/active_status` 按旧快照写回（窗口被静默重开、version 回退；极端情况把已激活学期写回 draft → 全站无 active 学期），改为只写请求字段。④ **首登 wxCode 分支可接管账号**：wxCode 换来的 openid 原直接绑定并置已验证，未与已有 openid 比对——改为「只校验已绑定 openid，绑定仅发生在手机号后 4 位通过之后」。⑤ **重置密码不清 `first_login_verified`**：重置后（口令回到学号后 6 位）可跳过首登校验直接改密，已一并清零。⑥ **draft 学期名单导入全局停用账号**：停用比对候选集来自 `sys_user.college_id`（active 学期冗余列），对 draft 学期导入会把 active 在册的人误停用；现仅在「目标学期 = active 学期」时执行。⑦ 可信代理配置绑定修复（`TEXTBOOK_TRUSTED_PROXIES` 此前无占位符，配了不生效，审计 IP 恒为 127.0.0.1）。⑧ 通知任务合并时 `target_roles` 取并集（此前合并进手动 STUDENT-only 任务后，教师/秘书收不到窗口变更通知）。⑨ `local` profile 连非本机库直接拒绝启动；定时任务线程池 1 → 3（通知重发不再阻塞窗口引擎）。 |

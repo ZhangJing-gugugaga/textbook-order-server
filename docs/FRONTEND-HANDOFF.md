@@ -44,6 +44,12 @@ POST /api/admin/order-forms/{id}/review
 | ✅ | `/api/me`、`/api/me/permissions`、`PUT /api/me/password` |
 | ❌ | 其余全部（含 `POST /api/auth/switch-role`）→ 403 `FIRST_LOGIN_REQUIRED` |
 
+**首登校验的两种方式（2026-09-22 收紧）**：`{phoneTail}`（手机号后 4 位）通过后才把 `wxCode` 换来的
+openid 绑到账号；**只带 `{wxCode}` 时只能校验「已绑定的 openid」**，未绑定的账号一律 401 并计入失败计数。
+原因：原实现把 wxCode 换来的 openid 直接绑定并置已验证，配合「初始口令 = 学号后 6 位（学号可枚举）」
+可被任何人接管账号。小程序端若在首登页只发 wxCode，请改为「手机号后 4 位必填 + 可选 wxCode」；
+**未填手机号的账号（导入模板手机号可空）无法自助首登，需教材室补手机号**。
+
 **变更点**：此前 `/api/auth/switch-role` 被 `/api/auth/` 前缀通配放行（它会重发 access/refresh，
 等于让未完成首登的会话拿到新的长效令牌），现已拦截。
 
@@ -209,8 +215,10 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
 
 ## E. 后端已自测覆盖（前端可据此判断"不是后端的问题"）
 
-- `./mvnw test -Dmysql.local.enabled=true` → **217 用例通过 / 0 失败 / 3 跳过**
-- `bash scripts/e2e-smoke.sh` → **45 项断言全通过**，含：
+- `./mvnw test -Dmysql.local.enabled=true` → **241 用例通过 / 0 失败 / 3 跳过**
+  （不加该参数则跳过本地 MySQL 用例，见 README §测试；跳过的 3 项 = Testcontainers×2 + 性能用例×1）
+- `bash scripts/smoke-isolated.sh` → **45 项断言全通过**（一次性库 + 独立端口，可重复执行；
+  直接跑 `e2e-smoke.sh` 需声明 `SMOKE_DB=<一次性库>`，对着共享库跑会被脚本拒绝），含：
   - 五角色主流程（ADMIN / TEACHER / STUDENT / SECRETARY / SUPPLIER）
   - A1 审核版本号 CAS（过期版本必须 409）
   - A5 供货商越权负例（读内部导出任务 404、访问教师/管理端 403）
