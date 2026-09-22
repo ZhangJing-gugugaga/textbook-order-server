@@ -45,6 +45,9 @@ public class SupplierService {
     public static final String XLSX_CONTENT_TYPE =
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
+    /** 清单接口行数上限（超出请用导出中心；导出走流式，不受此限） */
+    private static final int LIST_ROW_LIMIT = 20_000;
+
     private final SupplierOrderMapper supplierOrderMapper;
     private final ExportService exportService;
     private final AuditService auditService;
@@ -53,7 +56,12 @@ public class SupplierService {
     @Transactional(readOnly = true)
     public List<SupplierCollegeGroup> listOrders(Long semesterId) {
         Long semester = requireSemester(semesterId);
-        List<SupplierOrderRow> rows = supplierOrderMapper.selectReviewedRows(semester);
+        // 行数上限：清单是同步响应体，全量入内存无上限时大校单次请求即内存尖峰；
+        // 超出部分请走导出中心（异步 + 流式，无此限制）
+        List<SupplierOrderRow> rows = supplierOrderMapper.selectReviewedRows(semester, LIST_ROW_LIMIT);
+        if (rows.size() >= LIST_ROW_LIMIT) {
+            log.warn("供货商清单已达行数上限，结果被截断: semester={}, limit={}", semester, LIST_ROW_LIMIT);
+        }
         Map<Long, SupplierCollegeGroup> groups = new LinkedHashMap<>();
         for (SupplierOrderRow row : rows) {
             SupplierCollegeGroup group = groups.computeIfAbsent(row.getCollegeId(), key -> {
@@ -94,8 +102,13 @@ public class SupplierService {
         return task.getId();
     }
 
-    /** 同步流式导出（响应头由 Controller 事先设置，Service 只写 OutputStream） */
-    @Transactional
+    /**
+     * 同步流式导出（响应头由 Controller 事先设置，Service 只写 OutputStream）。
+     *
+     * <p>刻意不加 {@code @Transactional}：本方法把「xlsx 生成 + 网络传输」整体包在事务里时，
+     * Hikari 连接要等到响应写完才释放（池上限 20）。任一供货商账号并发发起慢速下载
+     * 即可耗尽连接池导致全站不可用。查询各自单语句，无需事务包裹。</p>
+     */
     public void writeSync(SupplierExportRequest request, OutputStream outputStream) throws IOException {
         Long semester = requireSemester(request.semesterId());
         long estimate = supplierOrderMapper.countReviewed(semester);
@@ -107,23 +120,26 @@ public class SupplierService {
         log.info("供货商导出（同步）: semester={}, 行数={}", semester, estimate);
     }
 
-    /** 导出任务进度 */
+    /**
+     * 导出任务进度（归属 + bizType 双重校验）。
+     *
+     * <p>export_task 与内部导出任务共表且主键自增，仅按 id 取任务时任一供货商账号
+     * 即可枚举读取内部任务（教师征订/学生选购/通知汇总）元数据。</p>
+     */
     @Transactional(readOnly = true)
     public ExportTask getTask(Long taskId) {
-        ExportTask task = exportService.getTask(taskId);
-        if (task == null) {
-            throw new BizException(ErrorCode.NOT_FOUND, "导出任务不存在");
-        }
-        return task;
+        return exportService.getSupplierTask(taskId);
     }
 
     /**
-     * 一次性下载 token 校验并消费（单次有效：首次下载后置空；过期/失效 → 410，
-     * 由 ExportService.claimDownload 抛出）。
+     * 一次性下载 token 校验并消费（归属 + bizType 校验；单次有效：首次下载后置空；
+     * 过期/失效 → 410，由 ExportService.claimDownload 抛出）。
+     *
+     * <p>不加 {@code @Transactional}：下载是「校验 + 单条 UPDATE」两步，
+     * 原子性由 claimDownload 内的 token CAS 谓词保证，无需外层事务。</p>
      */
-    @Transactional(readOnly = true)
     public ExportTask claimDownload(Long taskId, String token) {
-        return exportService.claimDownload(taskId, token);
+        return exportService.claimSupplierDownload(taskId, token);
     }
 
     private Long requireSemester(Long semesterId) {

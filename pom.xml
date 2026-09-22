@@ -30,7 +30,43 @@
     <weixin-java.version>4.6.0</weixin-java.version>
     <archunit.version>1.3.2</archunit.version>
     <testcontainers.version>1.20.6</testcontainers.version>
+    <!-- 传递依赖版本收口（P3）：easyexcel 带入 POI 4.1.2 / commons-io 2.11.0，
+         weixin-java-common 带入 bcprov-jdk15on 1.70 —— 均为已停止维护的旧版本。
+         仅升版本，不改坐标，避免影响上层库的 API 兼容性。 -->
+    <poi.version>5.2.5</poi.version>
+    <commons-io.version>2.16.1</commons-io.version>
+    <!-- POI 5.2.5 需要 commons-compress >= 1.25（ZipArchiveOutputStream#putArchiveEntry
+         在 1.25 变更签名），easyexcel 带入的 1.24.0 会抛 NoSuchMethodError -->
+    <commons-compress.version>1.27.1</commons-compress.version>
   </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- easyexcel 3.3.4 声明 POI 4.1.2（2020 年版本、上游停止维护），此处收口到 5.2.5 -->
+      <dependency>
+        <groupId>org.apache.poi</groupId>
+        <artifactId>poi</artifactId>
+        <version>${poi.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.poi</groupId>
+        <artifactId>poi-ooxml</artifactId>
+        <version>${poi.version}</version>
+      </dependency>
+      <!-- commons-io 2.11.0 早于修复 CVE-2024-47554 的 2.14.0 -->
+      <dependency>
+        <groupId>commons-io</groupId>
+        <artifactId>commons-io</artifactId>
+        <version>${commons-io.version}</version>
+      </dependency>
+      <!-- POI 5.x 的 zip 读写依赖 commons-compress，需与 POI 版本匹配 -->
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-compress</artifactId>
+        <version>${commons-compress.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>
@@ -63,11 +99,19 @@
       <scope>runtime</scope>
     </dependency>
 
-    <!-- Excel：EasyExcel 流式读写 -->
+    <!-- Excel：EasyExcel 流式读写（POI 版本经 dependencyManagement 收口到 5.2.5） -->
     <dependency>
       <groupId>com.alibaba</groupId>
       <artifactId>easyexcel</artifactId>
       <version>${easyexcel.version}</version>
+      <exclusions>
+        <!-- POI 5.x 用 poi-ooxml-lite 承载 schema；保留 4.x 的 poi-ooxml-schemas
+             会在 classpath 上留下重复的 xmlbeans schema 类 -->
+        <exclusion>
+          <groupId>org.apache.poi</groupId>
+          <artifactId>poi-ooxml-schemas</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <!-- JWT：jjwt 0.12.x -->
@@ -108,6 +152,43 @@
       <groupId>com.github.binarywang</groupId>
       <artifactId>weixin-java-miniapp</artifactId>
       <version>${weixin-java.version}</version>
+      <exclusions>
+        <!-- bouncycastle 1.70 三件套（bcprov/bcpkix/bcutil-jdk15on）已停止维护
+             （jdk15on 线最后版本即 1.70）。已核实 weixin-java-* 4.6.0 的 1079 个 class
+             对 org/bouncycastle **零字节码引用**（仅 POM 里残留声明），故排除无运行风险。
+             bcprov 改用同一维护线的 jdk18on：类名/包名完全一致，仅坐标与所需 JDK 不同
+             （本项目 Java 17），任何真实调用路径都能命中同一套类。 -->
+        <exclusion>
+          <groupId>org.bouncycastle</groupId>
+          <artifactId>bcprov-jdk15on</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.bouncycastle</groupId>
+          <artifactId>bcpkix-jdk15on</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.bouncycastle</groupId>
+          <artifactId>bcutil-jdk15on</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk18on</artifactId>
+      <version>1.78.1</version>
+    </dependency>
+
+    <!-- 压缩包解析：导入上传的解压体积/条目数上限校验（POI 5.x 的 xlsx 用数据描述符
+         流式写 zip，JDK 的 ZipInputStream 会抛 invalid entry size，故用 commons-compress） -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-compress</artifactId>
+    </dependency>
+
+    <!-- 可观测性：健康检查 / 指标（P3）。仅暴露 health，其余端点默认关闭，见 application.yml -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
     <dependency>

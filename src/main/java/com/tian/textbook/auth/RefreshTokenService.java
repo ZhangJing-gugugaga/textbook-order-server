@@ -1,5 +1,6 @@
 package com.tian.textbook.auth;
 
+import com.tian.textbook.common.util.AppTime;
 import com.tian.textbook.common.config.TextbookProperties;
 import com.tian.textbook.system.entity.SysUserToken;
 import com.tian.textbook.system.mapper.SysUserTokenMapper;
@@ -37,7 +38,7 @@ public class RefreshTokenService {
         SysUserToken token = new SysUserToken();
         token.setUserId(userId);
         token.setTokenHash(sha256(plain));
-        token.setExpireAt(LocalDateTime.now().plusDays(refreshDays));
+        token.setExpireAt(AppTime.now().plusDays(refreshDays));
         token.setRevoked(0);
         token.setDeviceId(deviceId);
         token.setDeleted(0L);
@@ -56,7 +57,7 @@ public class RefreshTokenService {
     public String rotate(String plainToken, Long userId, String deviceId) {
         SysUserToken existing = tokenMapper.selectByHash(sha256(plainToken));
         if (existing == null || existing.getRevoked() != 0
-                || existing.getExpireAt() == null || existing.getExpireAt().isBefore(LocalDateTime.now())) {
+                || existing.getExpireAt() == null || existing.getExpireAt().isBefore(AppTime.now())) {
             return null;
         }
         if (!existing.getUserId().equals(userId)) {

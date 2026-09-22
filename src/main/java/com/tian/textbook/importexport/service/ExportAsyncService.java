@@ -1,8 +1,10 @@
 package com.tian.textbook.importexport.service;
 
+import com.tian.textbook.common.util.AppTime;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.tian.textbook.common.config.AsyncConfig;
 import com.tian.textbook.common.config.TextbookProperties;
+import com.tian.textbook.common.util.FailureMessages;
 import com.tian.textbook.importexport.entity.ExportTask;
 import com.tian.textbook.importexport.mapper.ExportTaskMapper;
 import com.tian.textbook.system.config.ConfigService;
@@ -52,7 +54,7 @@ public class ExportAsyncService {
                 dataWriter.write(task.getBizType(), task.getParamsJson(), out);
             }
 
-            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime now = AppTime.now();
             int tokenMinutes = configService.getInt(ConfigService.EXPORT_DOWNLOAD_TOKEN_MINUTES,
                     properties.getExport().getDownloadTokenMinutes());
             int retentionHours = properties.getExport().getRetentionHours();
@@ -64,14 +66,16 @@ public class ExportAsyncService {
                     .set(ExportTask::getDownloadToken, UUID.randomUUID().toString())
                     .set(ExportTask::getTokenExpireAt, now.plusMinutes(tokenMinutes))
                     .set(ExportTask::getExpiresAt, now.plusHours(retentionHours)));
-            log.info("异步导出完成: taskId={}, bizType={}, file={}", taskId, task.getBizType(), target);
+            // 只记录文件名，不打印服务器绝对路径（日志会外发/长期留存，路径属内部信息）
+            log.info("异步导出完成: taskId={}, bizType={}, file={}", taskId, task.getBizType(),
+                    target.getFileName());
         } catch (Exception e) {
             log.error("异步导出失败: taskId={}, bizType={}", taskId, task.getBizType(), e);
             exportTaskMapper.update(null, Wrappers.<ExportTask>lambdaUpdate()
                     .eq(ExportTask::getId, taskId)
                     .set(ExportTask::getStatus, "failed")
-                    .set(ExportTask::getErrorMsg, e.getMessage() == null ? "导出失败" :
-                            e.getMessage().length() > 255 ? e.getMessage().substring(0, 255) : e.getMessage()));
+                    // 只透传业务异常文案：原始异常消息可能含 SQL/表名/服务器绝对路径
+                    .set(ExportTask::getErrorMsg, FailureMessages.userFacing(e, "导出失败，请重试或联系教材室")));
         }
     }
 }

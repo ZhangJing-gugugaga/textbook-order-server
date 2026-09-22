@@ -48,11 +48,14 @@ class NoticeIntegrationTest extends IntegrationTestBase {
     private Long semesterId;
     private Long studentId;
     private Long teacherId;
+    /** 超管账号 id（用例内复用：asAdmin 多次调用不重复建号，user_no 唯一键约束） */
+    private Long adminId;
 
     @AfterEach
     void tearDown() {
         SemesterContextHolder.clear();
         TestSecurity.clear();
+        adminId = null;
     }
 
     private void seed() {
@@ -75,8 +78,11 @@ class NoticeIntegrationTest extends IntegrationTestBase {
     }
 
     private void asAdmin() {
-        var admin = seeder.user("AD", "超管", "13800000009", null, null, 1, 0, 1, "ADMIN");
-        TestSecurity.authenticate(admin.getId(), "AD", "超管", Set.of("ADMIN"), "ADMIN",
+        if (adminId == null) {
+            var admin = seeder.user("AD", "超管", "13800000009", null, null, 1, 0, 1, "ADMIN");
+            adminId = admin.getId();
+        }
+        TestSecurity.authenticate(adminId, "AD", "超管", Set.of("ADMIN"), "ADMIN",
                 seeder.permissionsOf("ADMIN"));
     }
 
@@ -267,5 +273,52 @@ class NoticeIntegrationTest extends IntegrationTestBase {
                 .isInstanceOf(com.tian.textbook.common.error.BizException.class)
                 .satisfies(e -> assertThat(((com.tian.textbook.common.error.BizException) e).getErrorCode())
                         .isEqualTo(com.tian.textbook.common.error.ErrorCode.STATE_CONFLICT));
+    }
+
+    @Test
+    @DisplayName("我的通知：含已确认与已关闭任务、回显 confirmedAt，created_at DESC 分页")
+    void myNotices_includesConfirmedAndClosedWithPagination() {
+        seed();
+        asAdmin();
+        var first = notifyService.createTask(createRequest("教材征订提醒", "请尽快提交征订"));
+        asStudent();
+        notifyService.confirm(first.getId(), null);
+        asAdmin();
+        notifyService.closeTask(first.getId());
+        var second = notifyService.createTask(createRequest("窗口变更通知", "窗口已延长至 2026-10-01"));
+
+        asStudent();
+        var page1 = notifyService.myNotices(1, 1);
+
+        assertThat(page1.total()).isEqualTo(2);
+        assertThat(page1.totalPages()).isEqualTo(2);
+        assertThat(page1.list()).singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getTaskId()).isEqualTo(second.getId());
+                    assertThat(item.getStatus()).isEqualTo("active");
+                    assertThat(item.getConfirmedAt()).isNull();
+                    assertThat(item.getContent()).isEqualTo("窗口已延长至 2026-10-01");
+                });
+        var page2 = notifyService.myNotices(2, 1);
+        assertThat(page2.list()).singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getTaskId()).isEqualTo(first.getId());
+                    assertThat(item.getStatus()).isEqualTo("closed");
+                    assertThat(item.getSource()).isEqualTo("manual");
+                    assertThat(item.getConfirmedAt()).isNotNull();
+                });
+    }
+
+    @Test
+    @DisplayName("我的通知：无 active 学期 → 空页（与 unconfirmed 同口径）")
+    void myNotices_withoutActiveSemester_returnsEmptyPage() {
+        seed();
+        asStudent();
+        SemesterContextHolder.clear();
+
+        var page = notifyService.myNotices(1, 20);
+
+        assertThat(page.list()).isEmpty();
+        assertThat(page.total()).isZero();
     }
 }

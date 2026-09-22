@@ -1,8 +1,11 @@
 spring:
   application:
     name: textbook-order-server
+  # 必填：不提供默认 profile。历史上默认 local 会在生产漏设环境变量时执行
+  # db/schema.sql + data-seed.sql，向生产库写入 18 个已知口令的测试账号（含超管）。
+  # 缺失即由 StartupSelfCheck 断言失败，启动中止（fail-fast）。
   profiles:
-    active: ${SPRING_PROFILES_ACTIVE:local}
+    active: ${SPRING_PROFILES_ACTIVE:}
   # JSON 序列化：时间统一 Asia/Shanghai
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
@@ -29,6 +32,9 @@ spring:
     # 文件上传上限（import.max_file_mb 配置项另做业务校验）
     format:
       date-time: yyyy-MM-dd HH:mm:ss
+  # 优雅停机：停止接收新请求后，等待在途请求与异步任务收尾的宽限期
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
 
 server:
   port: ${SERVER_PORT:8080}
@@ -36,6 +42,11 @@ server:
   error:
     include-message: never
     include-stacktrace: never
+  # 优雅停机（默认 immediate 会硬切在途请求）
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: ${SERVER_TOMCAT_MAX_THREADS:200}
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
@@ -45,13 +56,32 @@ mybatis-plus:
   global-config:
     banner: false
 
+# 健康检查（P3）：仅暴露 health（存活/就绪），不暴露 env/beans/heapdump 等信息端点。
+# 探针：/actuator/health（就绪）与 /actuator/health/liveness、/actuator/health/readiness
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    # 数据源与磁盘空间参与健康判定（磁盘不足是导出/导入失败的首要原因）
+    db:
+      enabled: true
+    diskspace:
+      enabled: true
+
 springdoc:
+  # OpenAPI 为唯一契约源（W12），但生产不得暴露：默认关闭，仅 local 显式开启。
   api-docs:
-    enabled: ${SPRINGDOC_ENABLED:true}
+    enabled: ${SPRINGDOC_ENABLED:false}
   swagger-ui:
-    enabled: ${SPRINGDOC_ENABLED:true}
+    enabled: ${SPRINGDOC_ENABLED:false}
     path: /swagger-ui.html
-  # OpenAPI 3 为唯一契约源（W12）
   default-produces-media-type: application/json
 
 # 业务配置（SPEC §13 application-{env}.yml 主要键）
@@ -61,9 +91,16 @@ textbook:
       max-fail: 5            # 登录失败 5 次锁定（W20）
       lock-minutes: 15       # 锁定 15 分钟
   jwt:
-    secret: ${JWT_SECRET:textbook-dev-only-insecure-secret-key-32b}
+    # 必填：无默认值（缺失即启动失败，见 StartupSelfCheck）。
+    # 历史默认值 textbook-dev-only-insecure-secret-key-32b 是仓库公开字符串，
+    # 用它签发/校验令牌等于任何人可离线伪造超管 token（认证绕过）。
+    secret: ${JWT_SECRET:}
     access-minutes: 15       # access 15 分钟
     refresh-days: 7          # refresh 7 天
+  cors:
+    # 跨域来源白名单（逗号分隔，完整 origin，如 https://moonzj.com）。
+    # 默认空 = 不返回任何 CORS 头（Web 走 Nginx 同域反代，小程序端不受 CORS 约束）。
+    allowed-origins: ${TEXTBOOK_CORS_ORIGINS:}
   import:
     max-file-mb: 10          # 上传上限（与 system_config.import.max_file_mb 对应）
     pool:
@@ -74,7 +111,11 @@ textbook:
     tmp-dir: ${TEXTBOOK_EXPORT_TMP:./data/export}
     sync-row-threshold: 5000 # 预估行数 > 5000 走异步任务（Q16）
     download-token-minutes: 10
-    retention-hours: 24      # 导出文件保留 24 小时
+    retention-hours: 24      # 导出文件保留 24 小时（同时约束下载与错误明细文件）
+  async:
+    # 启动时回收上次进程遗留的 running/queued 任务（默认开）。
+    # 多实例（滚动发布）必须置 false：新实例会把旧实例正在执行的任务误判为遗留。
+    recover-on-startup: ${TEXTBOOK_ASYNC_RECOVER:true}
   weixin:
     miniapp:
       appid: ${WX_MINIAPP_APPID:}
@@ -82,9 +123,9 @@ textbook:
       subscribe-template-id: ${WX_SUBSCRIBE_TEMPLATE_ID:}
 
 logging:
+  # 日志格式/轮转统一由 logback-spring.xml 定义（含 %X{traceId} 链路标识）。
+  # 此处不再声明 logging.pattern.console：它会被 logback-spring.xml 的 pattern 覆盖，
+  # 是死配置，留着只会误导「改这里就能改日志格式」。
   level:
     root: INFO
     com.tian.textbook: ${LOG_LEVEL_APP:INFO}
-  # 日志按天轮转保留 30 天、不含密码/token（PRD 安全自检）
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

@@ -27,4 +27,10 @@ public interface OrderFormItemMapper extends BaseMapper<OrderFormItem> {
     /** 汇总/导出：已审核通过表单的明细（课程×班级×教材×数量） */
     List<java.util.Map<String, Object>> selectReviewedItems(@Param("semesterId") Long semesterId,
                                                             @Param("collegeId") Long collegeId);
+
+    /**
+     * 汇总/导出的行数（阈值判定用）：与 {@link #selectReviewedItems} 同口径，只取 COUNT。
+     * 导出前的预估不应把整表结果物化进内存，仅为与阈值比较一次。
+     */
+    long countReviewedItems(@Param("semesterId") Long semesterId, @Param("collegeId") Long collegeId);
 }

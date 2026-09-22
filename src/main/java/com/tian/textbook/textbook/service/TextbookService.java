@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.tian.textbook.common.PageResponse;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
+import com.tian.textbook.common.util.SqlLike;
 import com.tian.textbook.textbook.dto.TextbookSaveRequest;
 import com.tian.textbook.textbook.entity.Textbook;
 import com.tian.textbook.textbook.mapper.TextbookMapper;
@@ -29,13 +30,18 @@ public class TextbookService {
     @Transactional(readOnly = true)
     public PageResponse<Textbook> page(String isbn, String title, String author, String press,
                                       Integer status, long page, long size) {
-        long safePage = Math.max(page, 1);
-        long safeSize = Math.min(Math.max(size, 1), 200);
+        long safePage = PageResponse.normalizePage(page);
+        long safeSize = PageResponse.normalizeSize(size);
         long offset = (safePage - 1) * safeSize;
-        List<Textbook> list = textbookMapper.selectPageByFilter(trimToNull(isbn), trimToNull(title),
-                trimToNull(author), trimToNull(press), status, offset, safeSize);
-        long total = textbookMapper.countByFilter(trimToNull(isbn), trimToNull(title),
-                trimToNull(author), trimToNull(press), status);
+        // XML 已写 ESCAPE '|'，此处必须同步转义：否则用户输入的 % 仍是通配符，
+        // ESCAPE 子句形同虚设（输入单个 % 即退化为全表扫描）
+        String kwIsbn = SqlLike.escape(isbn);
+        String kwTitle = SqlLike.escape(title);
+        String kwAuthor = SqlLike.escape(author);
+        String kwPress = SqlLike.escape(press);
+        List<Textbook> list = textbookMapper.selectPageByFilter(kwIsbn, kwTitle,
+                kwAuthor, kwPress, status, offset, safeSize);
+        long total = textbookMapper.countByFilter(kwIsbn, kwTitle, kwAuthor, kwPress, status);
         return PageResponse.of(list, safePage, safeSize, total);
     }
 

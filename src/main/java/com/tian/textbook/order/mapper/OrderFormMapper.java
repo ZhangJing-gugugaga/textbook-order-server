@@ -29,6 +29,7 @@ public interface OrderFormMapper extends BaseMapper<OrderForm> {
     OrderForm selectByIdSoft(@Param("id") Long id);
 
     /** 教师本人历史提交记录（数据隔离：teacher_id = 本人） */
+    @ResultMap(RESULT_MAP)
     @CollegeScope(teacherColumn = "teacher_id")
     @Select("SELECT * FROM order_form WHERE teacher_id = #{teacherId} AND deleted = 0 ORDER BY id DESC")
     List<OrderForm> selectTeacherForms(@Param("teacherId") Long teacherId);
@@ -69,4 +70,14 @@ public interface OrderFormMapper extends BaseMapper<OrderForm> {
 
     /** 看板/导出用：按学院聚合教师提交进度。 */
     List<java.util.Map<String, Object>> countGroupByCollegeAndStatus(@Param("semesterId") Long semesterId);
+
+    /**
+     * 内容版本 +1（教师每次提交/补正整单覆盖后调用）。
+     *
+     * <p>审核端以 {@code content_version} 作为 CAS 谓词的一部分，识别「管理员打开详情后
+     * 教师又重提过」——此时 status 仍是 pending_review，但明细已被整单覆盖。</p>
+     */
+    @org.apache.ibatis.annotations.Update(
+            "UPDATE order_form SET content_version = COALESCE(content_version, 0) + 1 WHERE id = #{id} AND deleted = 0")
+    int bumpContentVersion(@Param("id") Long id);
 }

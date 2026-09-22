@@ -11,6 +11,7 @@ import com.tian.textbook.order.dto.OrderFormSubmitRequest;
 import com.tian.textbook.order.dto.StudentBookVO;
 import com.tian.textbook.order.dto.StudentOrderSubmitItem;
 import com.tian.textbook.order.dto.StudentOrderSubmitRequest;
+import com.tian.textbook.order.dto.TeacherTextbookOptionVO;
 import com.tian.textbook.order.entity.OrderForm;
 import com.tian.textbook.order.entity.OrderFormItem;
 import com.tian.textbook.order.entity.StudentOrder;
@@ -292,22 +293,67 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
                     assertThat(book.isDelisted()).isFalse();
                 });
 
-        // 教师重提 → 超管驳回：教材仍在清单（教师提交过）但 delisted=true
+        // reviewed 为终态（PRD 状态机「退出条件 = —」）：教师重提必须被拒，
+        // 否则审批结论会被静默撤销（学生清单与采购导出随之变化且无留痕）
         asTeacher();
-        teacherOrderService.submit(validItems());
-        asAdmin();
-        var rejectedForm = orderFormMapper.selectBySemesterAndTeacher(scenario.semesterId(),
-                scenario.teacherId());
-        teacherOrderService.review(rejectedForm.getId(),
-                new OrderFormReviewRequest("reject", "暂缓征订"));
-        asStudent();
+        assertThatThrownBy(() -> teacherOrderService.submit(validItems()))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT));
 
-        List<StudentBookVO> afterReject = studentOrderService.bookList();
-        assertThat(afterReject).singleElement()
-                .satisfies(book -> {
-                    assertThat(book.isRequired()).isTrue(); // 仍出现在已提交表单中
-                    assertThat(book.isDelisted()).isTrue(); // 无 reviewed 来源
-                });
+        // 驳回路径的 delisted 语义见 studentSubmit_delistedTextbook_returns400
+        // （rejected 表单无 reviewed 来源 → 清单标「已下架」）
+        asStudent();
+        List<StudentBookVO> stillReviewed = studentOrderService.bookList();
+        assertThat(stillReviewed).singleElement()
+                .satisfies(book -> assertThat(book.isDelisted()).isFalse());
+    }
+
+    @Test
+    @DisplayName("S3：审核页打开后教师重提 → 用旧版本号审核必须 409（防审核对象漂移）")
+    void review_staleContentVersion_conflicts() {
+        seedScenario("OS3");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        assertThat(submitted.getStatus()).isEqualTo("pending_review");
+        int versionSeenByReviewer = submitted.getContentVersion();
+        assertThat(versionSeenByReviewer).as("详情必须暴露 contentVersion 供审核端回传").isPositive();
+
+        // 审核员打开详情页之后，教师又重提了一次（状态仍是 pending_review，明细已被整单覆盖）
+        asTeacher();
+        // 数量须在 1..班级人数(50) 内，取 30 以区别于首次提交的 50
+        var resubmitted = teacherOrderService.submit(new OrderFormSubmitRequest(List.of(
+                new OrderFormSubmitItem(scenario.courseId(), scenario.classId(), scenario.textbookId(), 30))));
+        assertThat(resubmitted.getContentVersion())
+                .as("整单覆盖后内容版本必须递增")
+                .isGreaterThan(versionSeenByReviewer);
+
+        // 审核员用打开页面时看到的版本号提交 → 必须被拒（否则审批结论落在没见过的内容上）
+        asAdmin();
+        assertThatThrownBy(() -> teacherOrderService.review(submitted.getId(),
+                new OrderFormReviewRequest("pass", null, versionSeenByReviewer)))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT));
+
+        // 刷新详情拿到新版本号后审核成功
+        var fresh = teacherOrderService.getFormDetail(submitted.getId());
+        var approved = teacherOrderService.review(submitted.getId(),
+                new OrderFormReviewRequest("pass", null, fresh.getContentVersion()));
+        assertThat(approved.getStatus()).isEqualTo("reviewed");
+    }
+
+    @Test
+    @DisplayName("S3：未回传 contentVersion 时降级为请求内比对，审核仍可正常通过")
+    void review_withoutContentVersion_stillWorks() {
+        seedScenario("OS3B");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+
+        asAdmin();
+        // 两参构造（兼容旧调用）→ contentVersion=null → 降级路径
+        var approved = teacherOrderService.review(submitted.getId(),
+                new OrderFormReviewRequest("pass", null));
+
+        assertThat(approved.getStatus()).isEqualTo("reviewed");
     }
 
     @Test
@@ -316,14 +362,10 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
         seedScenario("OJ");
         asTeacher();
         var submitted = teacherOrderService.submit(validItems());
+        // 直接驳回（而非「通过后再重提驳回」——reviewed 是终态，不可重提）：
+        // 该表单已提交但无 reviewed 来源，教材在清单中标「已下架」
         asAdmin();
-        teacherOrderService.review(submitted.getId(), new OrderFormReviewRequest("pass", null));
-        asTeacher();
-        teacherOrderService.submit(validItems());
-        asAdmin();
-        var form = orderFormMapper.selectBySemesterAndTeacher(scenario.semesterId(),
-                scenario.teacherId());
-        teacherOrderService.review(form.getId(), new OrderFormReviewRequest("reject", "暂缓"));
+        teacherOrderService.review(submitted.getId(), new OrderFormReviewRequest("reject", "暂缓"));
         asStudent();
 
         assertThatThrownBy(() -> studentOrderService.submit(new StudentOrderSubmitRequest(
@@ -452,5 +494,110 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
         assertThat(semesterMapper.selectByIdSoft(scenario.semesterId()).getActiveStatus())
                 .isEqualTo("active");
         assertThat(scenario.windowEnd()).isAfter(LocalDateTime.now());
+    }
+
+    // ============ 学生历史（GET /api/student/orders） ============
+
+    @Test
+    @DisplayName("学生历史：itemCount/totalQuantity 与提交时归属快照齐备（跨学期摘要）")
+    void studentHistory_carriesItemCountAndSubmitSnapshot() {
+        seedScenario("OS");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        asAdmin();
+        teacherOrderService.review(submitted.getId(), new OrderFormReviewRequest("pass", null));
+        asStudent();
+        studentOrderService.submit(new StudentOrderSubmitRequest(
+                List.of(new StudentOrderSubmitItem(scenario.textbookId(), 2))));
+
+        List<com.tian.textbook.order.dto.StudentOrderListItem> history = studentOrderService.myHistory();
+
+        assertThat(history).singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getItemCount()).isEqualTo(1);
+                    assertThat(item.getTotalQuantity()).isEqualTo(2);
+                    assertThat(item.getSemesterName()).isEqualTo("2026-2027-OS");
+                    // 归属取提交时快照（异动不影响历史归属，W15）
+                    assertThat(item.getSubmitSnapshot()).isNotNull();
+                    assertThat(item.getCollegeId()).isEqualTo(scenario.collegeId());
+                    assertThat(item.getClassName()).isEqualTo("软工2401OS");
+                });
+    }
+
+    @Test
+    @DisplayName("超管全院选购分页：itemCount/totalQuantity 由 SQL 聚合带出")
+    void adminStudentOrdersPage_aggregatesItemCountAndQuantity() {
+        seedScenario("OT");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        asAdmin();
+        teacherOrderService.review(submitted.getId(), new OrderFormReviewRequest("pass", null));
+        asStudent();
+        studentOrderService.submit(new StudentOrderSubmitRequest(
+                List.of(new StudentOrderSubmitItem(scenario.textbookId(), 3))));
+
+        asAdmin();
+        var page = studentOrderService.allPage(scenario.semesterId(), null, null, null, 1, 20);
+
+        assertThat(page.total()).isEqualTo(1);
+        assertThat(page.list()).singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getItemCount()).isEqualTo(1);
+                    assertThat(item.getTotalQuantity()).isEqualTo(3);
+                    assertThat(item.getStudentNo()).isEqualTo("SOT");
+                });
+    }
+
+    // ============ 填报选书器（GET /api/teacher/textbook） ============
+
+    @Test
+    @DisplayName("选书器：只返回在库教材（status=1），关键词命中书名/ISBN/作者/出版社")
+    void teacherTextbookOptions_onlyActiveTextbooksAndKeywordMatch() {
+        seedScenario("OQ");
+        asTeacher();
+        var stopped = seeder.textbook("978-7-111-40702-7", "已停用教材", 0);
+
+        // 无关键词：在库教材全量，停用教材不出现（与字段审查 BOOK_ACTIVE 同口径）
+        assertThat(teacherOrderService.searchTextbooks(null))
+                .extracting(TeacherTextbookOptionVO::getTextbookId)
+                .contains(scenario.textbookId())
+                .doesNotContain(stopped.getId());
+        assertThat(teacherOrderService.searchTextbooks("已停用教材")).isEmpty();
+
+        // 关键词：书名 / ISBN / 作者 / 出版社 四路模糊匹配
+        assertThat(teacherOrderService.searchTextbooks("高等数学OQ"))
+                .extracting(TeacherTextbookOptionVO::getTextbookId)
+                .containsExactly(scenario.textbookId());
+        assertThat(teacherOrderService.searchTextbooks("978-0-306-40615-7"))
+                .extracting(TeacherTextbookOptionVO::getTextbookId)
+                .containsExactly(scenario.textbookId());
+        assertThat(teacherOrderService.searchTextbooks("测试作者"))
+                .extracting(TeacherTextbookOptionVO::getTextbookId)
+                .contains(scenario.textbookId());
+        assertThat(teacherOrderService.searchTextbooks("测试出版社"))
+                .extracting(TeacherTextbookOptionVO::getTextbookId)
+                .contains(scenario.textbookId());
+
+        // 字段白名单：选书器所需字段齐备（不含审计列）
+        var option = teacherOrderService.searchTextbooks("高等数学OQ").get(0);
+        assertThat(option.getTextbookId()).isEqualTo(scenario.textbookId());
+        assertThat(option.getIsbn()).isEqualTo("978-0-306-40615-7");
+        assertThat(option.getTitle()).isEqualTo("高等数学OQ");
+        assertThat(option.getEdition()).isEqualTo("第1版");
+        assertThat(option.getAuthor()).isEqualTo("测试作者");
+        assertThat(option.getPress()).isEqualTo("测试出版社");
+        assertThat(option.getPrice()).isEqualByComparingTo("45.00");
+    }
+
+    @Test
+    @DisplayName("选书器：单次封顶 50 条（选择器场景不分页）")
+    void teacherTextbookOptions_cappedAtFifty() {
+        seedScenario("OR");
+        asTeacher();
+        for (int i = 0; i < 55; i++) {
+            seeder.textbook("978-7-0000-" + String.format("%04d", i) + "-0", "批量教材" + i, 1);
+        }
+
+        assertThat(teacherOrderService.searchTextbooks("批量教材")).hasSize(50);
     }
 }

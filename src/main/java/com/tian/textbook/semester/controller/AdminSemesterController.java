@@ -104,7 +104,7 @@ public class AdminSemesterController {
     public ApiResponse<PageResponse<AuditLog>> windowChanges(@PathVariable Long id,
                                                              @RequestParam(defaultValue = "1") long page,
                                                              @RequestParam(defaultValue = "20") long size) {
-        List<AuditLog> records = semesterService.windowChanges(id, page, Math.min(size, 200));
-        return ApiResponse.ok(PageResponse.of(records, page, size, records.size()));
+        // 分页归一化与 total 计算收敛在 Service（Controller 不再做分层外的参数归一化）
+        return ApiResponse.ok(semesterService.windowChanges(id, page, size));
     }
 }

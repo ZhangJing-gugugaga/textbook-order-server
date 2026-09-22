@@ -1,6 +1,8 @@
 package com.tian.textbook.semester;
 
+import com.tian.textbook.common.util.AppTime;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.tian.textbook.common.PageResponse;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.notify.WindowChangeNotifier;
@@ -258,7 +260,7 @@ public class SemesterService {
      */
     @Transactional
     public Semester extendWindow(Long id, WindowExtendRequest request) {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = AppTime.now();
         if (request.windowEnd() == null || !request.windowEnd().isAfter(now)) {
             throw new BizException(ErrorCode.PARAM_INVALID, "延长后的截止时间必须晚于当前时间");
         }
@@ -350,10 +352,20 @@ public class SemesterService {
         activeSemesterService.evict();
     }
 
+    /**
+     * 窗口变更记录分页（谁/何时/原值→新值，W24）。
+     *
+     * <p>分页参数经 {@link PageResponse} 归一化：此前只做上限、未做下限，
+     * {@code size<=0} 会生成 {@code LIMIT 0} 或负值（后者直接 SQL 异常 → 500）。</p>
+     */
     @Transactional(readOnly = true)
-    public List<AuditLog> windowChanges(Long id, long page, long size) {
-        long offset = (Math.max(page, 1) - 1) * size;
-        return auditLogMapper.selectByResource("window", String.valueOf(id), offset, size);
+    public PageResponse<AuditLog> windowChanges(Long id, long page, long size) {
+        long safePage = PageResponse.normalizePage(page);
+        long safeSize = PageResponse.normalizeSize(size);
+        long offset = (safePage - 1) * safeSize;
+        List<AuditLog> list = auditLogMapper.selectByResource("window", String.valueOf(id), offset, safeSize);
+        long total = auditLogMapper.countByResource("window", String.valueOf(id));
+        return PageResponse.of(list, safePage, safeSize, total);
     }
 
     private Map<String, Object> windowSnapshot(Semester s) {

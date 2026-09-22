@@ -18,6 +18,10 @@ public enum ErrorCode {
     BIZ_ERROR("BIZ_ERROR", "操作失败", 400),
     BOOK_DELISTED("BOOK_DELISTED", "部分教材已下架，请核对后重新提交", 400),
 
+    // 405 / 415：协议级错误必须与 400 区分（此前被 Exception 兜底成 500）
+    METHOD_NOT_ALLOWED("METHOD_NOT_ALLOWED", "请求方法不被支持", 405),
+    MEDIA_TYPE_NOT_SUPPORTED("MEDIA_TYPE_NOT_SUPPORTED", "请求内容类型不被支持", 415),
+
     // 401 三类语义（契约冻结项）
     UNAUTHORIZED("UNAUTHORIZED", "登录已过期，请重新登录", 401),
     TOKEN_EXPIRED("TOKEN_EXPIRED", "登录已过期，请重新登录", 401),

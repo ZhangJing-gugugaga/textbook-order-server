@@ -1,6 +1,6 @@
 # 教材征订系统 · 服务端 API 手册
 
-> 版本 V1.0.0 · 2026-09-21 · 依据 `SPEC.md` §11 契约基线（92 个端点）
+> 版本 V1.0.3 · 2026-09-21 · 依据 `SPEC.md` §11 契约基线（95 个端点；V1.0.1–3 联调新增 3 个最小权限只读端点）
 > 定位：**前后端联调速查手册**。唯一契约源为 springdoc-openapi 生成的 OpenAPI 3 文档（`GET /v3/api-docs`、`/swagger-ui.html`），本文档与代码同步维护，冲突时以 OpenAPI 为准。
 > 配套文档：[README.md](README.md)（环境/账号/测试）、[docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)（实现范围与裁剪）、[docs/deployment.md](docs/deployment.md)（部署）
 
@@ -15,7 +15,8 @@
 | 接口前缀 | `/api/**`（本地 `http://localhost:8080`；试运行/移交经 Nginx 反代 `https://<域名>/api/`） |
 | 前端调用 | **一律相对路径**（Web 同域 `/api`；小程序 baseUrl 单点配置） |
 | 请求头 | `Authorization: Bearer <accessToken>`；`Content-Type: application/json`（上传为 `multipart/form-data`）；可选 `X-Device-Id`（refresh 轮换的会话标识） |
-| 字符集 | UTF-8；时间字符串 `yyyy-MM-dd HH:mm:ss`（时区固定 Asia/Shanghai） |
+| 字符集 | UTF-8 |
+| 时间格式 | **入参**（body/query 的 `LocalDateTime`）：`yyyy-MM-dd HH:mm:ss`（`spring.mvc.format.date-time`），时区固定 Asia/Shanghai；**出参**：ISO-8601 本地日期时间（`2026-09-21T09:30:00`，含微秒时为 `2026-09-21T09:30:00.123456`）——`spring.jackson.date-format` 只作用于 `java.util.Date`，不影响 JSR-310 类型，前端需自行格式化（见 §5.10） |
 | CORS | 同域反代不需要；小程序/跨端已开启允许（合法域名白名单） |
 
 ### 1.2 统一响应包络
@@ -28,6 +29,7 @@
 
 - 成功：`code = "0"`，`message` 为 null（不输出）
 - 失败：`code` 为错误码令牌（见 §1.6），`message` 为面向用户的中文文案，`data` 可为逐字段错误明细
+- **null 键省略**（Jackson `NON_NULL`）：成功且无数据时整个 `data` 键不出现（如无单时的 `/api/teacher/order-form`、`/api/student/order`）；`/api/me` 无归属行时 `semesterId/collegeId/classId/collegeName/className` 五键均不出现。前端判空必须用 `== null` / 可选链，不要写 `data === null` 或 `'semesterId' in data`
 - HTTP 状态码同时反映语义（400/401/403/404/409/410/429/500），**前端应以 `code` 分流，以 HTTP 状态兜底**
 
 ### 1.3 分页
@@ -51,7 +53,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | access token | 15 分钟；放 `Authorization: Bearer`；**不落库** |
 | refresh token | 7 天；每次 `POST /api/auth/refresh` 轮换（旧 token 立即失效）；登出/停用/改密/角色变更会撤销全部 refresh |
 | 401 三类语义（契约冻结项） | `TOKEN_EXPIRED`：access 过期 → 用 refresh 静默重放<br>`REFRESH_INVALID`：refresh 失效 / 角色版本失效 → 强制登出<br>`ACCOUNT_DISABLED`：账号停用 → 强制登出 |
-| 首登拦截 | 初始密码登录后 `mustChangePassword=true`：**业务接口一律 403 `FIRST_LOGIN_REQUIRED`**，仅 `/api/auth/**`、`/api/me*` 可用；流程 = 首登校验 → 改密 |
+| 首登拦截 | 初始密码登录后 `mustChangePassword=true`：**业务接口一律 403 `FIRST_LOGIN_REQUIRED`**。放行清单为**显式枚举**：`POST /api/auth/login`、`POST /api/auth/refresh`、`POST /api/auth/first-login/verify`、`POST /api/auth/logout`、`/api/me*`（含 `PUT /api/me/password`）。注意 `POST /api/auth/switch-role` **不在**放行清单内（它会重发令牌）；流程 = 首登校验 → 改密 |
 | 多角色 | `roles[]` 为全部角色；`currentRole` 为当前身份；`POST /api/auth/switch-role` 切换身份（**仅改变权限码呈现，数据范围不变**） |
 | 前端菜单 | `GET /api/me/permissions` 返回当前身份的权限码集合，用于动态路由/菜单/按钮（`v-perm`） |
 | 登录失败 | 失败 5 次锁定 15 分钟（落库，重启不清）；锁定期间返回 401 `ACCOUNT_LOCKED`；同 IP/账号 1 分钟粒度限频（429 `RATE_LIMITED`） |
@@ -89,6 +91,8 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | `ACCOUNT_LOCKED` | 401 | 账号已锁定，请稍后再试 | 失败 5 次锁 15 分钟 |
 | `ACCOUNT_DISABLED` | 401 | 账号已停用，请联系教材室 | 强制登出 |
 | `FIRST_LOGIN_VERIFY_FAILED` | 401 | 校验信息不正确，请联系教材室 | 首登校验 |
+| `METHOD_NOT_ALLOWED` | 405 | 请求方法不被支持 | 方法不匹配（此前被兜底成 500） |
+| `MEDIA_TYPE_NOT_SUPPORTED` | 415 | 请求内容类型不被支持 | Content-Type 错误（此前被兜底成 500） |
 | `FORBIDDEN` / `RESOURCE_FORBIDDEN` | 403 | 无权执行该操作 / 无权访问该资源 | 越权访问写审计 |
 | `FIRST_LOGIN_REQUIRED` | 403 | 请先完成首登校验并修改初始密码 | 首登拦截 |
 | `NOT_FOUND` | 404 | 资源不存在 | |
@@ -139,6 +143,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 ├─ /api/me/permissions              权限码集合（动态菜单）
 ├─ /api/me/password                 改密
 ├─ /api/notice/unconfirmed          未确认通知（阻塞弹窗数据源）
+├─ /api/notice/mine                 我的通知（全量含已确认，分页）
 ├─ /api/notice/{taskId}/confirm     确认（204）
 └─ /api/export-task/{id}[/download] 导出任务查询与下载
 
@@ -162,7 +167,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 └─ export/signature                 本院签字版导出
 
 教师 /api/teacher/**
-├─ my-courses、order-form[/submit]、order-forms   填报与历史
+├─ my-courses、textbook、order-form[/submit]、order-forms   填报与历史
 └─ change、change（GET）            异动提交与记录
 
 学生 /api/student/**
@@ -318,13 +323,14 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
 | GET | `/api/teacher/my-courses` | `order:form:submit` | 本学期任课关系按班级分组：`[{classId, className, courses:[{courseId, courseName}]}]` |
+| GET | `/api/teacher/textbook` | `order:form:submit` | **填报选书器**：`?keyword=` 在库教材检索（title/isbn/author/press 模糊匹配），返回**裸数组（非分页端点）** `[{textbookId,isbn,title,edition,author,press,price}]`；只返回 `status=1`，单次封顶 50 条（选择器场景，前端不做翻页） |
 | GET | `/api/teacher/order-form` | `order:form:submit` | 当前学期征订单 + 明细（无单时 `data=null`） |
 | POST | `/api/teacher/order-form/submit` | `order:form:submit` | 提交/补正（返回字段审查结果；失败 400 `FIELD_CHECK_FAILED` + `data=[{field,rule,message}]`） |
 | GET | `/api/teacher/order-forms` | `order:form:view:self` | 历史提交记录（含学期名） |
 | GET | `/api/secretary/order-forms` | `order:form:view:college` | 本院表单分页 `?status&teacherName&page&size` |
 | GET | `/api/admin/order-forms` | `order:form:view:all` | 全院表单分页 `?semesterId&collegeId&status&teacherName&page&size` |
-| GET | `/api/admin/order-forms/{id}` | `order:form:view:all` | 详情（含 `fieldCheckResult` 与明细）；教师只能看本人、秘书只能看本院（否则 403 + 审计） |
-| POST | `/api/admin/order-forms/{id}/review` | `order:form:review` | `{action:"pass"|"reject", reason}`；reject 理由必填 1-200 字；仅 `pending_review` 可审（否则 409） |
+| GET | `/api/admin/order-forms/{id}` | `order:form:view:all` | 详情（含 `fieldCheckResult`、`contentVersion` 与明细）；教师只能看本人、秘书只能看本院（否则 403 + 审计） |
+| POST | `/api/admin/order-forms/{id}/review` | `order:form:review` | `{action:"pass"|"reject", reason, contentVersion}`；reject 理由必填 1-200 字；仅 `pending_review` 可审（否则 409）。**`contentVersion` 必传**：把详情接口读到的值原样回传，服务端以它做 CAS——审核页打开后教师若又重提过（状态仍是 pending_review 但明细已被整单覆盖），版本不一致即 409「表单内容已变更或状态已更新，请刷新后重试」，避免审批结论落在没见过的内容上。不传时只能拦住请求处理窗口内的并发提交（降级行为） |
 
 **POST /api/teacher/order-form/submit**
 
@@ -349,8 +355,10 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | GET | `/api/student/book-list` | `student:order:submit` | 本班教材清单：`[{textbookId,isbn,title,edition,author,press,price,required,delisted}]`（清单 = 本班任课关系下教师已审核通过教材并集；`delisted=true` 不可选，仅用于提示） |
 | GET | `/api/student/order` | `student:order:submit` | 本人选购单 + 明细（含教材信息与下架标记） |
 | POST | `/api/student/order/submit` | `student:order:submit` | 提交（**覆盖语义**：重提 = 整单替换） |
-| GET | `/api/student/orders` | `student:order:view:self` | 历史选购记录 |
+| GET | `/api/student/orders` | `student:order:view:self` | 历史选购记录（跨学期摘要：`id,semesterId,semesterName,status,submittedAt,itemCount,totalQuantity` + 提交时归属快照） |
 | GET | `/api/admin/student-orders` | `student:order:view:all` | 全院选购分页 `?semesterId&collegeId&classId&studentName&page&size` |
+
+> **已知缺口**：历史学期只有摘要端点，**无历史明细端点**（`GET /api/student/order` 仅返回 active 学期且无 `?semesterId` 参数）。小程序端按「历史仅摘要、明细限当前学期」降级展示。
 
 **POST /api/student/order/submit**
 
@@ -360,17 +368,18 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 
 > 校验：窗口内（`windowStatus=open` 且 `channelOpen=1`，否则 409 `WINDOW_CLOSED`）；数量 1-9 且 ≤ 班级人数；含下架教材 → 400 `BOOK_DELISTED`。提交时记录学院/班级快照（后续异动不影响历史归属）。
 
-### 3.8 异动审批（提交端 3 + 审批端 3）
+### 3.8 异动审批（提交端 4 + 审批端 3）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
 | POST | `/api/teacher/change` | `change:request:submit` | 逐条提交（教师/秘书同构） |
 | POST | `/api/secretary/change` | `change:request:submit` | 逐条提交 |
 | POST | `/api/secretary/change/import` | `change:request:submit` | Excel 批量（列：学号/工号、变更类型、目标学院、目标班级、原因）→ `{batchId, batchNo, total, okCount, errorCount}` |
-| GET | `/api/teacher/change` | `change:request:submit` | 我的提交记录 |
+| GET | `/api/teacher/change` | `change:request:submit` | 我的提交记录（教师/秘书均可调，返回当前用户本人记录） |
+| GET | `/api/change/org-options` | `change:request:submit` | **提交端目标归属选项**：`{colleges:[{id,name}], classes:[{id,name,majorId}]}`（只读，不含人数等管理字段；组织维护接口仍为超管专属） |
 | GET | `/api/admin/change` | `change:request:review` | 审批列表分页 `?semesterId&status&batchNo&type&page&size` |
 | POST | `/api/admin/change/{id}/review` | `change:request:review` | `{action:"pass"|"reject", reason}`（reject 理由必填；通过后对 active 学期**立即生效**） |
-| POST | `/api/admin/change/batch/review` | `change:request:review` | `{batchNo, action, reason}` 按批次批量处理 |
+| POST | `/api/admin/change/batch/review` | `change:request:review` | `{batchNo, action, reason}` 按批次批量处理（**仅支持按 batchNo，无按 ids 多选形态**；非导入产生的单条记录无 batchNo，需逐条审批） |
 
 **POST /api/teacher/change**
 
@@ -391,7 +400,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | GET | `/api/admin/teacher-course/template` | `course:teacher:manage` | 任课模板（xlsx） |
 | POST | `/api/admin/user/import` | `people:*:import` | 名单导入 → `{batchId}` |
 | GET | `/api/admin/user/import/template` | `people:*:import` | 名单模板（xlsx） |
-| GET | `/api/batch/{batchId}` | `import:batch:view` | 批次进度：`{id,bizType,total,okCount,errorCount,progressPct,status,batchNo,errorDetail}` |
+| GET | `/api/batch/{batchId}` | `import:batch:view` | 批次进度：`{id,bizType,total,okCount,errorCount,progressPct,status,batchNo,errorDetail}`。**归属校验**：非 ADMIN 只能读自己发起的批次，否则 404 |
 | GET | `/api/batch/{batchId}/errors` | `import:batch:view` | 错误明细下载（xlsx；无错误行 → 404） |
 
 **前端轮询建议**：上传 → 得 `batchId` → 每 1-2s 调 `GET /api/batch/{batchId}` 直到 `status ∈ {done, failed}`；`errorCount > 0` 时提供「下载错误明细」。**导入顺序**（外键依赖，前端按此引导）：学院 → 专业 → 班级 → 教师 → 课程任课 → 学生 → 异动。
@@ -406,8 +415,8 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | POST | `/api/secretary/export/signature` | `export:signature:create` | 本院签字版（含签字栏三行；学院范围取当前用户 active 学期归属） |
 | POST | `/api/admin/export/students` | `export:student:create` | 学生选购汇总（参考用量：学院/班级/ISBN/书名/学生数/数量合计） |
 | POST | `/api/admin/export/notice` | `export:notice:create` | 通知汇总（body `{taskId}`；含各轮发送时间/状态、确认状态/时间） |
-| GET | `/api/export-task/{id}` | 登录（非 ADMIN 仅本人任务） | 任务进度：`{id,bizType,rowEstimate,status,progressPct,downloadToken,tokenExpireAt,expiresAt,errorMsg}` |
-| GET | `/api/export-task/{id}/download` | 同上 | 必填 query `?token=<downloadToken>`；一次性下载（xlsx；复用/过期 → 410） |
+| GET | `/api/export-task/{id}` | 登录（非 ADMIN 仅本人任务，否则 **404**） | 任务进度：`{id,bizType,rowEstimate,status,progressPct,downloadToken,tokenExpireAt,expiresAt,errorMsg}`。`downloadToken` 仅在**任务所有者**的响应中出现（越权读取由归属校验 + 统一 404 兜住）；`filePath`（服务器内部路径）永不下发 |
+| GET | `/api/export-task/{id}/download` | 同上 | 必填 query `?token=<downloadToken>`；一次性下载（xlsx；复用/过期/超出文件保留期 → 410）。token 以 CAS 原子消费：并发同 token 请求只有一个能成功 |
 
 **导出调用形态（四类一致）**
 
@@ -418,11 +427,12 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
                                              → GET /api/export-task/{taskId}/download?token=<downloadToken>
 ```
 
-### 3.11 通知确认闭环（2 + 管理端 5）
+### 3.11 通知确认闭环（3 + 管理端 5）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
-| GET | `/api/notice/unconfirmed` | 登录 | 未确认任务队列（**阻塞弹窗数据源**）：`[{taskId,title,content,source,createdAt,roundStopped}]`，按创建时间倒序；前端弹窗队列上限 `notice.popup_queue_max`（默认 5，保留最新 5 条），全量在「我的」页可查 |
+| GET | `/api/notice/unconfirmed` | 登录 | 未确认任务队列（**阻塞弹窗数据源**）：`[{taskId,title,content,source,createdAt,roundStopped}]`，按创建时间倒序；**按 `target_roles` 定向**（仅面向本人角色的任务，ADMIN 全量）；前端弹窗队列上限 `notice.popup_queue_max`（默认 5，保留最新 5 条），全量在「我的」页可查（见下行 `/mine`） |
+| GET | `/api/notice/mine` | 登录 | **我的通知（「我的」页数据源）**：`?page=1&size=20` → `PageResponse`，含**已确认与已关闭**任务：`[{taskId,title,content,source,status,createdAt,confirmedAt}]`；`confirmedAt=null` 表示待确认；与 `/unconfirmed` 同口径（**按 `target_roles` 定向**：仅返回面向本人角色的任务，ADMIN 全量可见） |
 | POST | `/api/notice/{taskId}/confirm` | 登录 | 确认「收到」→ **HTTP 204 无 body**；幂等（重复调用仍 204）；body 可带 `{subscribeResult:"accepted"|"rejected"}`（小程序订阅授权上报） |
 | GET | `/api/admin/notice/tasks` | `notice:task:view` | 本学期任务列表 |
 | POST | `/api/admin/notice/tasks` | `notice:task:manage` | 手动创建 `{title,content,targetRoles?}`（默认 `STUDENT`；同学期已有 active → 409 `NOTICE_TASK_EXISTS`） |
@@ -449,7 +459,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 |------|------|------|------|
 | GET | `/api/supplier/orders` | `supplier:order:view` | 按学院分组清单 `?semesterId=`（默认 active）：`[{collegeId,collegeName,items:[{teacherName,isbn,title,quantity}]}]` — 字段白名单：**书名/ISBN/数量/教师姓名/学院** |
 | POST | `/api/supplier/export` | `supplier:order:export` | 一学院一 sheet 导出（同步流 / `{taskId,async:true,rowEstimate}`） |
-| GET | `/api/supplier/export-task/{id}` | `supplier:order:export` | 任务进度 |
+| GET | `/api/supplier/export-task/{id}` | `supplier:order:export` | 任务进度。**仅限本人创建的 `bizType=supplier` 任务**，否则 404（内部导出任务不可枚举、不可下载） |
 | GET | `/api/supplier/export-task/{id}/download` | `supplier:order:export` | 必填 query `?token=<downloadToken>`；一次性下载（复用/过期 → 410） |
 
 > 红线：`/api/supplier/**` 为独立模块物理隔离，**不提供任何学生字段路径**；每次导出写审计（谁/何时/范围）。
@@ -478,7 +488,7 @@ POST /api/teacher/order-form/submit     提交
   ├─ 字段审查不过 → 400 FIELD_CHECK_FAILED + data=[{field,rule,message}]（表单落 rejected_auto，可无限次修复重提）
   └─ 通过 → status=pending_review
 GET  /api/admin/order-forms?status=pending_review   超管复核工作台
-POST /api/admin/order-forms/{id}/review {action:"reject", reason:"数量与班级人数不符"}
+POST /api/admin/order-forms/{id}/review {action:"reject", reason:"数量与班级人数不符", contentVersion:3}
   → status=rejected，correctDeadline=关窗+7 天
   → 教师端显示驳回理由；关窗后仍可在 correctDeadline 前补正重提（超期 409 CORRECTION_EXPIRED）
 ```
@@ -517,6 +527,7 @@ POST /api/admin/export/orders  {"semesterId":1}
 （登录后）GET /api/notice/unconfirmed → 弹窗队列（前端按 popup_queue_max 截断展示）
 用户点「收到」→ POST /api/notice/{taskId}/confirm  → 204（幂等）
 小程序可在同一请求带 {"subscribeResult":"accepted"} 上报订阅授权（仅学生收订阅消息）
+「我的」页历史 → GET /api/notice/mine?page=1&size=20（含已确认，confirmedAt 非空即已确认）
 ```
 
 ---
@@ -532,6 +543,10 @@ POST /api/admin/export/orders  {"semesterId":1}
 7. **错误展示**：优先展示 `message`（已按 PRD 文案规范）；字段审查类错误按 `data[{field,rule,message}]` 定位到具体行/字段。
 8. **分页从 1 开始**：`page=1` 为第一页；`size` 上限 200。
 9. **路径以本手册与 OpenAPI 为准**：如导出任务为 `/api/export-task/{id}`（单数，SPEC §11 契约基线）。
+10. **时间格式不对称**：入参用 `yyyy-MM-dd HH:mm:ss`；出参是 ISO-8601（`2026-09-21T09:30:00`，部分字段带微秒 `2026-09-21T09:30:00.123456`）。前端统一在响应拦截器里格式化，不要假设出参与入参同格式。
+11. **null 键省略**：成功且 `data` 为 null 时整个 `data` 键不出现；`/api/me` 无归属行时归属五键不出现。判空用 `== null` / 可选链，不要用 `'key' in obj` 或 `=== null` 判定「接口未返回」。
+12. **通知两个端点的分工**：`/api/notice/unconfirmed` 只给「未确认」（弹窗阻塞队列，含 `roundStopped`）；`/api/notice/mine` 给全量（含已确认与已关闭，分页）。**两者都按 `target_roles` 定向**（仅返回面向本人角色的任务，ADMIN 全量可见），前端应据此假设角色定向——空队列表示「没有面向本角色的通知」，不是故障。
+13. **联调环境限频**：登录限频默认 10 次/分钟（`textbook.security.login.rate-per-minute`，按 IP+账号），多角色反复走查很快会撞 429 `RATE_LIMITED`；联调/压测环境建议调高。
 
 ---
 
@@ -540,3 +555,10 @@ POST /api/admin/export/orders  {"semesterId":1}
 | 日期 | 变更 | 说明 |
 |------|------|------|
 | 2026-09-21 | 首版（V1.0.0） | 对齐 SPEC §11 契约基线（92 端点）；统一导出异步返回为 `{taskId, async, rowEstimate}`；导出/导入响应不下发服务器文件路径（`@JsonIgnore`） |
+| 2026-09-21 | 新增 1 端点（V1.0.1） | `GET /api/teacher/textbook`（`order:form:submit`）：联调发现教师端缺少选书器数据源——教师无 `textbook:book:manage`，`/api/admin/textbook` 对其 403，而 PRD「填报教材页」要求「教材库搜索（书名/ISBN）选中后入明细」。补最小权限只读端点（仅 `status=1` 在库教材，字段白名单不含审计列，单次封顶 50 条）。 |
+| 2026-09-21 | 新增 1 端点（V1.0.2） | `GET /api/change/org-options`（`change:request:submit`）：联调发现教师/秘书提交异动时无目标学院/班级数据源（组织三表接口均为 `org:*:manage`，对其 403），前端表单无法选择目标归属。补最小权限只读选项端点（仅 id + 名称）。 |
+| 2026-09-21 | 缺陷修复（V1.0.2） | ① 导入落盘路径绝对化：`textbook.export.tmp-dir` 为相对路径（默认 `./data/export`）时 `MultipartFile.transferTo` 失败，5 个导入接口全部返回 400 `BIZ_ERROR 文件保存失败`；② 异动审批生效时同步 `sys_user.college_id/class_id` 冗余列（原仅写 `user_semester_profile`，导致 `/api/me` 与 `/api/admin/user` 在审批通过后仍回显异动前归属）。 |
+| 2026-09-21 | 新增 1 端点（V1.0.3） | `GET /api/notice/mine`（仅需登录，分页）：`03 §7` 与本文档 §3.11 承诺「未确认队列之外的全量通知在『我的』页可查」，但此前只有 `/unconfirmed`（仅未确认）与 `/{taskId}/confirm`，承诺无端点支撑；补分页端点，含已确认与已关闭任务并回显 `confirmedAt`。 |
+| 2026-09-21 | 契约补注（V1.0.3） | ① 明确**时间格式入参/出参不对称**（入参 `yyyy-MM-dd HH:mm:ss`，出参 ISO-8601 且可能带微秒——`spring.jackson.date-format` 只作用于 `java.util.Date`，不作用于 JSR-310）；② 明确 **null 键省略**语义（成功无数据时 `data` 键不出现；`/api/me` 无归属行时归属五键不出现）；③ 记录两处已知缺口：学生历史学期明细无端点（§3.7）、异动批量审批仅支持按 batchNo（§3.8）；④ 补联调限频说明（§5.13，默认 10 次/分钟）。 |
+| 2026-09-21 | 缺陷修复（V1.0.4） | ① **JSON 列漏挂 MP resultMap**（自定义 `@Select` 不自动套用 `autoResultMap`，JSON 列被静默丢弃）：`GET /api/student/orders` 的 `submitSnapshot` 及由其派生的 `collegeId/collegeName/classId/className` 全为 null；`GET /api/admin/audit` 的 `detail` 恒为 null。同族漏挂共 5 处（另含 `OrderFormMapper.selectTeacherForms`、`ExportTaskMapper.selectByToken/selectExpired`，当前无可见影响）已一并修复。② **`@CollegeScope` 数据隔离条件静默失效**：首个条件被拼成 `" OR x = y"` 导致解析必失败并返回 null（拦截器整段跳过），且 MP `setWhere` 是**替换**语义而 handler 未合并原 where——修复后隔离条件按预期生效（3 个标注语句另有 SQL 层显式过滤，此前未造成越权）。③ `GET /api/student/orders` 补 `itemCount`（明细行数，与教师侧 `order-forms` 口径一致）。 |
+| 2026-09-21 | 回归防护（V1.0.4） | 新增**真实 HTTP multipart 上传**集成用例（`RANDOM_PORT` + TestRestTemplate + 相对 `tmp-dir`）：回退 V1.0.2 的落盘修复后该用例即返回 400（与线上现象一致），锁定导入缺陷不再回归；另补数据隔离条件构建单元用例、审计明细读回用例、学生历史/选书器/org-options 用例。测试总数 140 → 164。 |

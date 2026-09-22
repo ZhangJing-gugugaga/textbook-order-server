@@ -44,15 +44,46 @@ public class AuditLogAspect {
             if (names != null) {
                 for (int i = 0; i < names.length; i++) {
                     Object arg = args[i];
-                    // 不含密码/token：仅记录可 JSON 化的普通参数摘要
-                    if (arg != null && !(arg instanceof String s && (s.length() > 200 || s.toLowerCase().contains("password")))) {
-                        detail.put(names[i], arg instanceof String || arg instanceof Number || arg instanceof Boolean ? arg : arg.getClass().getSimpleName());
+                    if (arg == null) {
+                        continue;
+                    }
+                    // 敏感参数一律脱敏：此前只看「取值含 password 的顶层字符串」，
+                    // 手机号、refreshToken、openid 等仍会原样写进 audit_log.detail_json。
+                    if (isSensitiveParam(names[i], arg)) {
+                        detail.put(names[i], "***");
+                        continue;
+                    }
+                    if (arg instanceof String s) {
+                        detail.put(names[i], s.length() > 200 ? s.substring(0, 200) : s);
+                    } else if (arg instanceof Number || arg instanceof Boolean) {
+                        detail.put(names[i], arg);
+                    } else {
+                        detail.put(names[i], arg.getClass().getSimpleName());
                     }
                 }
             }
         }
         auditService.recordIndependent(auditLog.action(), resource, resourceId, detail.isEmpty() ? null : detail);
         return result;
+    }
+
+    /** 敏感参数名（小写包含匹配） */
+    private static final String[] SENSITIVE_PARAM_NAMES = {
+            "password", "token", "secret", "phone", "mobile", "openid", "idcard", "credential"};
+
+    /** 参数是否敏感：参数名命中敏感词，或字符串取值含 password/token/secret。 */
+    private boolean isSensitiveParam(String name, Object value) {
+        String lowerName = name == null ? "" : name.toLowerCase(java.util.Locale.ROOT);
+        for (String sensitive : SENSITIVE_PARAM_NAMES) {
+            if (lowerName.contains(sensitive)) {
+                return true;
+            }
+        }
+        if (value instanceof String s) {
+            String lowerValue = s.toLowerCase(java.util.Locale.ROOT);
+            return lowerValue.contains("password") || lowerValue.contains("token") || lowerValue.contains("secret");
+        }
+        return false;
     }
 
     private String resolveResourceId(ProceedingJoinPoint pjp, AuditLog auditLog) {

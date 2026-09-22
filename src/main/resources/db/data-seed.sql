@@ -12,6 +12,7 @@
 --             20230103 学生丙（停用）            20230201 学生丁 Stu@12345（正常，外国语学院）
 --   SUPPLIER  600001 供货商甲 Sup@12345（正常）  600002 供货商乙（停用）  600003 供货商丙（首登待改密，初始 600003）
 -- 首登校验手机号后 4 位：各账号 phone 字段（如 学生甲=13700001001，后 4 位 0001）
+-- 口令哈希：每个账号独立随机 salt（同口令账号的 hash 互不相同，避免一处泄露连带多个账号）
 -- ============================================================================
 SET NAMES utf8mb4;
 
@@ -68,16 +69,16 @@ INSERT INTO sys_user (user_no, name, password_hash, phone, college_id, class_id,
 ('800102', '秘书乙', '$2a$10$jOYS18erfe4yvGMe89Wt8OKE7OBW/9kTZSYskLBlJs0I/bPcACmNy', '13800001102', (SELECT id FROM college WHERE name='计算机学院'), NULL, 1, 1, 0, 0, 1),
 ('800103', '秘书丙', '$2a$10$MiBK5he58ASXeFhGKUjnWeVW5XxgesscocPI5Ie0MkXCm3ZN7r1bW', '13800001103', (SELECT id FROM college WHERE name='计算机学院'), NULL, 0, 1, 0, 0, 1),
 -- TEACHER（计算机学院 ×2 + 外国语学院 ×1 + 双角色 ×1）
-('700101', '教师甲', '$2a$10$rQ9btd0SYr1RdFudYz3mh.e1CPIFUI4/sXsVneRZvu/gXMSgeKSQq', '1390000101', (SELECT id FROM college WHERE name='计算机学院'), NULL, 1, 0, 1, 0, 1),
+('700101', '教师甲', '$2a$10$Kt9GR/UVAf4Eaa5y4giCDeX4izUsoCoOG0e7jrL8Klh5EfWzniYOC', '1390000101', (SELECT id FROM college WHERE name='计算机学院'), NULL, 1, 0, 1, 0, 1),
 ('700102', '教师乙', '$2a$10$E00.qTGZCYpyD0CzBzbIPeFeLc55KyjxNxI4pHEvJXLleZl3s32le', '1390000102', (SELECT id FROM college WHERE name='计算机学院'), NULL, 1, 1, 0, 0, 1),
-('700103', '教师戊', '$2a$10$rQ9btd0SYr1RdFudYz3mh.e1CPIFUI4/sXsVneRZvu/gXMSgeKSQq', '1390000103', (SELECT id FROM college WHERE name='计算机学院'), NULL, 1, 0, 1, 0, 1),
-('700201', '教师丙', '$2a$10$rQ9btd0SYr1RdFudYz3mh.e1CPIFUI4/sXsVneRZvu/gXMSgeKSQq', '1390000201', (SELECT id FROM college WHERE name='外国语学院'), NULL, 1, 0, 1, 0, 1),
+('700103', '教师戊', '$2a$10$muJni3F.ZwDCp97YIH0LGulILJ86hgFqt58uF8TP0gmrEwLLk4M2e', '1390000103', (SELECT id FROM college WHERE name='计算机学院'), NULL, 1, 0, 1, 0, 1),
+('700201', '教师丙', '$2a$10$.DC8r7H0fZUtTdNcJeOgWeyW1yRARPKx9.eLo6WIwTUny1bZB90q2', '1390000201', (SELECT id FROM college WHERE name='外国语学院'), NULL, 1, 0, 1, 0, 1),
 ('700202', '教师丁', '$2a$10$JMZ6t7URwRq5GfA4/Q4PWOW2BPjFWtWQw5/iUJFJu341hRBHdLBZS', '1390000202', (SELECT id FROM college WHERE name='外国语学院'), NULL, 0, 1, 0, 0, 1),
 -- STUDENT
-('20230101', '学生甲', '$2a$10$tPstQvIwGzgEFjCA2YWdCekx8rlfQzCrGotpVJz7I6otFCurl9zCa', '13700001001', (SELECT id FROM college WHERE name='计算机学院'), (SELECT id FROM school_class WHERE name='软工2023-1'), 1, 0, 1, 0, 1),
+('20230101', '学生甲', '$2a$10$3C0HjScUcIISp9wtGuEwA.9bHlPZLm.Yupw2wb1exzqxWI3yPfkJu', '13700001001', (SELECT id FROM college WHERE name='计算机学院'), (SELECT id FROM school_class WHERE name='软工2023-1'), 1, 0, 1, 0, 1),
 ('20230102', '学生乙', '$2a$10$Vl07J2AZj.LhGs6GxWHMeu6D6QpAkbQ/R./Sk/sx75UgN3kz/2oeG', '13700001002', (SELECT id FROM college WHERE name='计算机学院'), (SELECT id FROM school_class WHERE name='软工2023-1'), 1, 1, 0, 0, 1),
 ('20230103', '学生丙', '$2a$10$Gt5MkznaNTWssmbn6sU5W.wiAf8W.hYECTzYDqef5c74PLK/wxt0u', '13700001003', (SELECT id FROM college WHERE name='计算机学院'), (SELECT id FROM school_class WHERE name='软工2023-1'), 0, 1, 0, 0, 1),
-('20230201', '学生丁', '$2a$10$tPstQvIwGzgEFjCA2YWdCekx8rlfQzCrGotpVJz7I6otFCurl9zCa', '13700002001', (SELECT id FROM college WHERE name='外国语学院'), (SELECT id FROM school_class WHERE name='英语2023-1'), 1, 0, 1, 0, 1),
+('20230201', '学生丁', '$2a$10$1kpcF0Ba10z7X4CidMjBIueYLVKOecUOtmUPc9MHR95Kp6KbQKuq6', '13700002001', (SELECT id FROM college WHERE name='外国语学院'), (SELECT id FROM school_class WHERE name='英语2023-1'), 1, 0, 1, 0, 1),
 -- SUPPLIER
 ('600001', '供货商甲', '$2a$10$tIPuCasNS75zg12R9MIH/eMCvlGl1BAPLy5msUNWzl3yBmXrzW0Ci', '13500000001', NULL, NULL, 1, 0, 1, 0, 1),
 ('600002', '供货商乙', '$2a$10$zjrSEOTMmHXMeFfB7.Jjr.57jPJfd/Ihp49u.k8BYbfowr4W/gFfG', '13500000002', NULL, NULL, 0, 1, 0, 0, 1),

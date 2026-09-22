@@ -16,7 +16,7 @@
         <if test="collegeId != null"> AND u.college_id = #{collegeId}</if>
         <if test="status != null"> AND u.status = #{status}</if>
         <if test="keyword != null and keyword != ''">
-            AND (u.user_no LIKE CONCAT(#{keyword}, '%') OR u.name LIKE CONCAT('%', #{keyword}, '%'))
+            AND (u.user_no LIKE CONCAT(#{keyword}, '%') ESCAPE '|' OR u.name LIKE CONCAT('%', #{keyword}, '%') ESCAPE '|')
         </if>
         <if test="roleCode != null and roleCode != ''">
             AND EXISTS (SELECT 1 FROM sys_user_role ur JOIN sys_role r ON r.id = ur.role_id
@@ -33,7 +33,7 @@
         <if test="collegeId != null"> AND u.college_id = #{collegeId}</if>
         <if test="status != null"> AND u.status = #{status}</if>
         <if test="keyword != null and keyword != ''">
-            AND (u.user_no LIKE CONCAT(#{keyword}, '%') OR u.name LIKE CONCAT('%', #{keyword}, '%'))
+            AND (u.user_no LIKE CONCAT(#{keyword}, '%') ESCAPE '|' OR u.name LIKE CONCAT('%', #{keyword}, '%') ESCAPE '|')
         </if>
         <if test="roleCode != null and roleCode != ''">
             AND EXISTS (SELECT 1 FROM sys_user_role ur JOIN sys_role r ON r.id = ur.role_id

@@ -27,7 +27,7 @@
         WHERE f.deleted = 0 AND f.semester_id = #{semesterId}
         <include refid="collegeScope"/>
         <if test="status != null and status != ''"> AND f.status = #{status}</if>
-        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%') ESCAPE '|'</if>
         ORDER BY f.submitted_at DESC, f.id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
@@ -38,7 +38,7 @@
         WHERE f.deleted = 0 AND f.semester_id = #{semesterId}
         <include refid="collegeScope"/>
         <if test="status != null and status != ''"> AND f.status = #{status}</if>
-        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%') ESCAPE '|'</if>
     </select>
 
     <select id="selectAllFormsPage" resultType="com.tian.textbook.order.dto.OrderFormListItem">
@@ -55,7 +55,7 @@
                           AND p3.college_id = #{collegeId} AND p3.deleted = 0)
         </if>
         <if test="status != null and status != ''"> AND f.status = #{status}</if>
-        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%') ESCAPE '|'</if>
         ORDER BY f.submitted_at DESC, f.id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
@@ -71,7 +71,7 @@
                           AND p3.college_id = #{collegeId} AND p3.deleted = 0)
         </if>
         <if test="status != null and status != ''"> AND f.status = #{status}</if>
-        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%')</if>
+        <if test="teacherName != null and teacherName != ''"> AND u.name LIKE CONCAT(#{teacherName}, '%') ESCAPE '|'</if>
     </select>
 
     <select id="countGroupByCollegeAndStatus" resultType="java.util.Map">

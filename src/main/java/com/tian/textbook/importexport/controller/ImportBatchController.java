@@ -1,8 +1,6 @@
 package com.tian.textbook.importexport.controller;
 
 import com.tian.textbook.common.ApiResponse;
-import com.tian.textbook.common.error.BizException;
-import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.importexport.ImportService;
 import com.tian.textbook.importexport.entity.ImportBatch;
 import com.tian.textbook.importexport.support.DownloadSupport;
@@ -27,22 +25,19 @@ public class ImportBatchController {
 
     private final ImportService importService;
 
-    /** 批次进度（total/ok/error/progress_pct/status） */
+    /** 批次进度（total/ok/error/progress_pct/status；归属校验：非 ADMIN 仅本人发起的批次） */
     @GetMapping("/{batchId}")
     @PreAuthorize("hasAuthority('import:batch:view')")
     public ApiResponse<ImportBatch> getBatch(@PathVariable Long batchId) {
-        return ApiResponse.ok(importService.getBatch(batchId));
+        return ApiResponse.ok(importService.getBatchForUser(batchId));
     }
 
-    /** 错误明细 xlsx 下载（无错误行 → 404） */
+    /** 错误明细 xlsx 下载（无错误行 → 404；归属校验同上） */
     @GetMapping("/{batchId}/errors")
     @PreAuthorize("hasAuthority('import:batch:view')")
     public void downloadErrors(@PathVariable Long batchId, HttpServletResponse response) throws IOException {
-        importService.getBatch(batchId);
-        String filePath = importService.errorFilePath(batchId);
-        if (filePath == null || filePath.isBlank()) {
-            throw new BizException(ErrorCode.NOT_FOUND, "该批次没有错误明细");
-        }
+        // 归属校验 + 文件存在性/过期提示都在 Service（Controller 只解析 HTTP）
+        String filePath = importService.errorFilePathForDownload(batchId);
         DownloadSupport.writeFile(response, Path.of(filePath), "导入错误明细-" + batchId + ".xlsx");
     }
 }

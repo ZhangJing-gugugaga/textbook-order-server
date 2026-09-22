@@ -1,5 +1,6 @@
 package com.tian.textbook.semester;
 
+import com.tian.textbook.common.util.AppTime;
 import com.tian.textbook.common.annotation.WithinWindow;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
@@ -62,7 +63,13 @@ public class WindowGuardImpl implements WindowGuard {
         throw new BizException(ErrorCode.WINDOW_NOT_OPEN);
     }
 
-    /** 补正豁免状态：本人该表单状态 ∈ {rejected, rejected_auto} 且未过 correct_deadline */
+    /**
+     * 补正豁免状态：本人该表单状态 ∈ {rejected, rejected_auto} 且未过 correct_deadline。
+     *
+     * <p>deadline 为空时<b>不</b>放行：豁免必须有时限兜底，否则教师只要提交一行必失败的数据
+     * 拿到 rejected_auto（该分支此前从不写 correct_deadline），就永久获得豁免，
+     * 关窗后乃至学期归档后仍可提交。无截止时间 = 无可放行窗口 → EXPIRED。</p>
+     */
     private CorrectionState correctionState(Long semesterId) {
         var current = com.tian.textbook.common.SecurityUtils.currentUser();
         if (current == null) {
@@ -73,8 +80,8 @@ public class WindowGuardImpl implements WindowGuard {
             return CorrectionState.NOT_APPLICABLE;
         }
         LocalDateTime deadline = form.getCorrectDeadline();
-        if (deadline != null && !deadline.isAfter(LocalDateTime.now())) {
-            // 补正窗口已过：区别于「本期征订已截止」的精确语义（SPEC §6 / 错误码表）
+        if (deadline == null || !deadline.isAfter(AppTime.now())) {
+            // 补正窗口已过（或未设定截止）：区别于「本期征订已截止」的精确语义（SPEC §6 / 错误码表）
             return CorrectionState.EXPIRED;
         }
         return CorrectionState.ALLOWED;

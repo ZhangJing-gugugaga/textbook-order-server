@@ -8,6 +8,7 @@ import com.tian.textbook.common.CurrentUser;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.semester.SemesterContextHolder;
+import com.tian.textbook.common.util.FailureMessages;
 import com.tian.textbook.importexport.entity.ImportBatch;
 import com.tian.textbook.importexport.excel.ImportErrorRow;
 import com.tian.textbook.importexport.excel.StudentImportRow;
@@ -304,11 +305,14 @@ public class ImportAsyncService {
         } catch (Exception e) {
             log.error("导入收尾失败（班级人数/停用比对）: batchId={}", ctx.batchId(), e);
         }
+        // 错误行总数 = 保留的明细 + 被上限截断的计数（error_detail 有 MAX_ERROR_DETAIL 上限，
+        // 直接用 errors.size() 会低报真实错误行数）
+        int errorCount = errors.size() + summary.truncatedErrors();
         ImportBatch update = new ImportBatch();
         update.setId(ctx.batchId());
         update.setTotal(summary.total());
         update.setOkCount(summary.okCount());
-        update.setErrorCount(errors.size());
+        update.setErrorCount(errorCount);
         update.setProgressPct(100);
         update.setStatus("done");
         update.setErrorDetail(errors.isEmpty() ? null : errors);
@@ -321,18 +325,20 @@ public class ImportAsyncService {
         detail.put("semesterId", ctx.semesterId());
         detail.put("total", summary.total());
         detail.put("okCount", summary.okCount());
-        detail.put("errorCount", errors.size());
+        detail.put("errorCount", errorCount);
+        detail.put("truncatedErrors", summary.truncatedErrors());
         detail.put("disabledCount", disabledCount);
         auditService.record(AuditService.IMPORT, "import_batch", String.valueOf(ctx.batchId()), detail);
-        log.info("导入完成: batchId={}, bizType={}, total={}, ok={}, error={}, 停用={}",
-                ctx.batchId(), ctx.bizType(), summary.total(), summary.okCount(), errors.size(), disabledCount);
+        log.info("导入完成: batchId={}, bizType={}, total={}, ok={}, error={}（截断明细={}）, 停用={}",
+                ctx.batchId(), ctx.bizType(), summary.total(), summary.okCount(), errorCount,
+                summary.truncatedErrors(), disabledCount);
     }
 
     private void markFailed(Long batchId, Exception e) {
         List<java.util.Map<String, Object>> detail = new ArrayList<>();
         java.util.Map<String, Object> entry = new LinkedHashMap<>();
         entry.put("row", 0);
-        entry.put("message", "导入失败：" + e.getMessage());
+        entry.put("message", "导入失败：" + FailureMessages.userFacing(e, "服务异常，请重试或联系教材室"));
         detail.add(entry);
         ImportBatch update = new ImportBatch();
         update.setId(batchId);

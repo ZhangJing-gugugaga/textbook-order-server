@@ -1,5 +1,6 @@
 package com.tian.textbook.approval.service;
 
+import com.tian.textbook.common.util.AppTime;
 import com.alibaba.excel.EasyExcel;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -27,14 +28,19 @@ import com.tian.textbook.importexport.mapper.ImportBatchMapper;
 import com.tian.textbook.semester.SemesterActiveService;
 import com.tian.textbook.semester.entity.Semester;
 import com.tian.textbook.semester.entity.UserSemesterProfile;
+import com.tian.textbook.semester.mapper.SemesterMapper;
 import com.tian.textbook.semester.mapper.UserSemesterProfileMapper;
 import com.tian.textbook.system.audit.AuditService;
 import com.tian.textbook.system.entity.College;
 import com.tian.textbook.system.entity.SchoolClass;
+import com.tian.textbook.system.entity.SysRole;
 import com.tian.textbook.system.entity.SysUser;
+import com.tian.textbook.system.entity.SysUserRole;
 import com.tian.textbook.system.mapper.CollegeMapper;
 import com.tian.textbook.system.mapper.SchoolClassMapper;
+import com.tian.textbook.system.mapper.SysRoleMapper;
 import com.tian.textbook.system.mapper.SysUserMapper;
+import com.tian.textbook.system.mapper.SysUserRoleMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -93,12 +99,18 @@ public class ChangeRequestService {
     /** 导入行错误明细上限（避免 error_detail JSON 过大） */
     private static final int MAX_IMPORT_ERROR_DETAIL = 500;
 
+    /** 单次批量审批条数上限（整批单事务，防止一次请求长时间持有连接与行锁） */
+    private static final int MAX_BATCH_REVIEW = 500;
+
     private final ChangeRequestMapper changeRequestMapper;
     private final SysUserMapper userMapper;
+    private final SysRoleMapper roleMapper;
+    private final SysUserRoleMapper userRoleMapper;
     private final CollegeMapper collegeMapper;
     private final SchoolClassMapper classMapper;
     private final UserSemesterProfileMapper profileMapper;
     private final ImportBatchMapper importBatchMapper;
+    private final SemesterMapper semesterMapper;
     private final SemesterActiveService activeSemesterService;
     private final AuditService auditService;
     private final TextbookProperties properties;
@@ -124,6 +136,7 @@ public class ChangeRequestService {
         Belonging before = currentBelonging(target == null ? null : target.getId(), active.getId());
         List<FieldCheckIssue> issues = fieldCheck(type, target, request.targetCollegeId(),
                 request.targetClassId(), before.collegeId(), before.classId(), false);
+        issues = withScopeCheck(issues, type, target, before, current, active.getId());
 
         ChangeRequest changeRequest = buildChangeRequest(active.getId(), current.userId(), type,
                 target == null ? null : target.getId(), request.targetCollegeId(), request.targetClassId(),
@@ -198,6 +211,7 @@ public class ChangeRequestService {
 
             List<FieldCheckIssue> issues = fieldCheck(type, target, collegeId, classId,
                     before.collegeId(), before.classId(), classAmbiguous);
+            issues = withScopeCheck(issues, type, target, before, current, active.getId());
             if (TYPE_TEACHER.equals(type) && !blank(row.getClassName())) {
                 // 与逐条提交的 400 对齐：教师异动仅支持变更学院
                 issues = new ArrayList<>(issues);
@@ -251,14 +265,38 @@ public class ChangeRequestService {
         return enrich(records);
     }
 
+    /**
+     * 异动提交端的目标归属选项：学院与班级的只读清单。
+     *
+     * <p>只返回 id + 名称（不含 student_count 等管理字段），供提交表单的下拉选择；
+     * 组织三表维护接口仍为超管专属（org:*:manage）。</p>
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> orgOptions() {
+        List<Map<String, Object>> colleges = collegeMapper.selectList(
+                        Wrappers.<College>lambdaQuery().eq(College::getDeleted, 0).orderByAsc(College::getId))
+                .stream()
+                .map(c -> Map.<String, Object>of("id", c.getId(), "name", c.getName()))
+                .toList();
+        List<Map<String, Object>> classes = classMapper.selectList(
+                        Wrappers.<SchoolClass>lambdaQuery().eq(SchoolClass::getDeleted, 0).orderByAsc(SchoolClass::getId))
+                .stream()
+                .map(k -> Map.<String, Object>of("id", k.getId(), "name", k.getName(), "majorId", k.getMajorId()))
+                .toList();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("colleges", colleges);
+        result.put("classes", classes);
+        return result;
+    }
+
     // ============ 审批列表（超管） ============
 
     /** 审批列表分页（semesterId/status/batchNo/type 过滤） */
     @Transactional(readOnly = true)
     public PageResponse<ChangeRequestListItem> page(Long semesterId, String status, String batchNo, String type,
                                                     long page, long size) {
-        long safeSize = Math.min(Math.max(size, 1), 200);
-        long safePage = Math.max(page, 1);
+        long safeSize = PageResponse.normalizeSize(size);
+        long safePage = PageResponse.normalizePage(page);
         long offset = (safePage - 1) * safeSize;
         List<ChangeRequestListItem> list = changeRequestMapper.selectPageByFilter(
                 semesterId, trimToEmpty(status), trimToEmpty(batchNo), trimToEmpty(type), offset, safeSize);
@@ -310,6 +348,12 @@ public class ChangeRequestService {
         List<ChangeRequest> pending = all.stream()
                 .filter(r -> STATUS_PENDING_REVIEW.equals(r.getStatus()))
                 .toList();
+        // 单次批量上限：整批在同一事务内逐条推进，无上限时一次请求可长时间持有连接与行锁
+        // （超限请分批提交，批内条目由导入时的 batch_no 决定）
+        if (pending.size() > MAX_BATCH_REVIEW) {
+            throw new BizException(ErrorCode.PARAM_INVALID,
+                    "该批次待审 " + pending.size() + " 条，超过单次审批上限 " + MAX_BATCH_REVIEW + " 条，请分批处理");
+        }
         attachPayloads(pending);
         for (ChangeRequest changeRequest : pending) {
             applyReview(changeRequest, action, reason, current);
@@ -327,53 +371,93 @@ public class ChangeRequestService {
     // ============ 审批落库（单条/批量共用，同一事务） ============
 
     /**
-     * 审批一条：pass → 写 active 学期 user_semester_profile（student 改 college_id+class_id，
+     * 审批一条：pass → 写该异动所属学期 user_semester_profile（student 改 college_id+class_id，
      * teacher 只改 college_id，W16）+ 审计；reject → reason + 审计。
+     *
+     * <p>并发保护：状态推进以 CAS（{@code status='pending_review'} 作谓词）完成，
+     * 两个管理员同时审批只有一个成功，后到者 409；此前只按 id 更新会让后写覆盖先写、
+     * 并产生重复审计记录。CAS 通过后再生效落库——同一事务内，落库失败即整体回滚。</p>
      *
      * <p>入参实体须已 {@link #attachPayloads} 回填 payload（审批通过读 after 值生效落库）。</p>
      */
     private void applyReview(ChangeRequest changeRequest, String action, String reason, CurrentUser current) {
         Long id = changeRequest.getId();
-        if (ACTION_PASS.equals(action)) {
-            applyToProfile(changeRequest);
-            changeRequest.setStatus(STATUS_APPROVED);
-        } else {
-            changeRequest.setStatus(STATUS_REJECTED);
-            changeRequest.setReason(reason);
-        }
-        changeRequest.setReviewerId(current.userId());
-        changeRequest.setReviewAt(LocalDateTime.now());
-        // 局部实体更新（MP 非空字段策略）：不动 payload/field_check_result，updated_at 交 DB 自动刷新
+        boolean pass = ACTION_PASS.equals(action);
+        LocalDateTime reviewAt = AppTime.now();
+        String nextStatus = pass ? STATUS_APPROVED : STATUS_REJECTED;
+
         ChangeRequest update = new ChangeRequest();
         update.setId(id);
-        update.setStatus(changeRequest.getStatus());
-        if (!ACTION_PASS.equals(action)) {
+        update.setStatus(nextStatus);
+        if (!pass) {
             update.setReason(reason);
         }
         update.setReviewerId(current.userId());
-        update.setReviewAt(changeRequest.getReviewAt());
-        changeRequestMapper.update(update, Wrappers.<ChangeRequest>lambdaUpdate()
-                .eq(ChangeRequest::getId, id));
-        // 审批通过落库与审计同事务（SPEC §12）
+        update.setReviewAt(reviewAt);
+        int rows = changeRequestMapper.update(update, Wrappers.<ChangeRequest>lambdaUpdate()
+                .eq(ChangeRequest::getId, id)
+                .eq(ChangeRequest::getStatus, STATUS_PENDING_REVIEW));
+        if (rows == 0) {
+            throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的异动状态，请刷新后重试");
+        }
+        changeRequest.setStatus(nextStatus);
+        changeRequest.setReviewerId(current.userId());
+        changeRequest.setReviewAt(reviewAt);
+        if (!pass) {
+            changeRequest.setReason(reason);
+        }
+        if (pass) {
+            applyToProfile(changeRequest);
+        }
+        // 审批落库与审计同事务（SPEC §12）
         auditService.record(AuditService.CHANGE, "change", String.valueOf(id),
                 Map.of("action", action, "targetUserId", String.valueOf(changeRequest.getTargetUserId())));
     }
 
     /**
-     * 生效落库（W15）：upsert active 学期 user_semester_profile。
+     * 生效落库（W15）：upsert <b>该异动所属学期</b>的 user_semester_profile，
+     * 并在该学期仍是 active 学期时同步 sys_user 冗余列 college_id/class_id
+     * （SPEC §7：冗余列由 profile 同步）。
      * teacher 仅更新 college_id（class_id 保持原值，MP 非空字段更新策略天然跳过 null）。
+     *
+     * <p>两个历史缺陷在此修正：</p>
+     * <ul>
+     *   <li><b>学期来源</b>：原实现用 {@code requireActiveSemester()}。异动单提交后管理员
+     *       切换学期（常规操作，待审记录会跨切换留存）再审批，归属就被写进新学期，
+     *       旧学期归属保持陈旧、新学期归属被凭空写入。现改为 {@code changeRequest.getSemesterId()}；</li>
+     *   <li><b>清空归属</b>：payload 解析失败时 after.collegeId 为 null，原实现直接
+     *       {@code set(collegeId, null)} 把用户 college_id 置空（MyBatis-Plus 两参 set 无条件写 NULL），
+     *       叠加 CollegeScopeHandler 的 {@code 1 = 0} 使该用户此后查不到任何数据。
+     *       现改为校验失败即抛异常终止审批。</li>
+     * </ul>
+     *
+     * <p>注意：/api/me 与 /api/admin/user 读的是 sys_user 冗余列，若只写 profile，
+     * 审批通过后这些接口会一直回显异动前的学院/班级（本方法两处同写，避免归属不一致）。</p>
      */
     private void applyToProfile(ChangeRequest changeRequest) {
-        Semester active = requireActiveSemester();
+        Long semesterId = changeRequest.getSemesterId();
+        if (semesterId == null) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "异动记录缺少所属学期，无法生效，请驳回后重新提交");
+        }
+        if (semesterMapper.selectByIdSoft(semesterId) == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "异动所属学期不存在，无法生效");
+        }
         Belonging after = readBelonging(changeRequest.getPayloadJson(), "after");
-        UserSemesterProfile existing =
-                profileMapper.selectByUserAndSemester(changeRequest.getTargetUserId(), active.getId());
+        boolean isStudent = TYPE_STUDENT.equals(changeRequest.getType());
+        if (after.collegeId() == null) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "异动目标学院缺失（payload 解析失败），无法生效，请驳回后重新提交");
+        }
+        if (isStudent && after.classId() == null) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "异动目标班级缺失（payload 解析失败），无法生效，请驳回后重新提交");
+        }
+        Long targetUserId = changeRequest.getTargetUserId();
+        UserSemesterProfile existing = profileMapper.selectByUserAndSemester(targetUserId, semesterId);
         if (existing == null) {
             UserSemesterProfile profile = new UserSemesterProfile();
-            profile.setUserId(changeRequest.getTargetUserId());
-            profile.setSemesterId(active.getId());
+            profile.setUserId(targetUserId);
+            profile.setSemesterId(semesterId);
             profile.setCollegeId(after.collegeId());
-            profile.setClassId(TYPE_STUDENT.equals(changeRequest.getType()) ? after.classId() : null);
+            profile.setClassId(isStudent ? after.classId() : null);
             profile.setStatus(1);
             profile.setDeleted(0L);
             profileMapper.insert(profile);
@@ -381,12 +465,32 @@ public class ChangeRequestService {
             UserSemesterProfile update = new UserSemesterProfile();
             update.setId(existing.getId());
             update.setCollegeId(after.collegeId());
-            if (TYPE_STUDENT.equals(changeRequest.getType())) {
+            if (isStudent) {
                 update.setClassId(after.classId());
             }
             profileMapper.update(update, Wrappers.<UserSemesterProfile>lambdaUpdate()
                     .eq(UserSemesterProfile::getId, existing.getId()));
         }
+        // sys_user 冗余列只描述「当前 active 学期归属」：异动所属学期已不是 active 时
+        // 写它会污染当前学期的显示（旧学期归属改完，新学期界面跟着变）。
+        if (semesterId.equals(activeSemesterService.activeId())) {
+            syncRedundantColumns(targetUserId, after.collegeId(), isStudent ? after.classId() : null);
+        } else {
+            log.info("异动生效于非 active 学期，跳过 sys_user 冗余列同步: changeId={}, semesterId={}",
+                    changeRequest.getId(), semesterId);
+        }
+    }
+
+    /** 同步 sys_user 冗余归属列（/api/me、/api/admin/user 的数据来源）。 */
+    private void syncRedundantColumns(Long userId, Long collegeId, Long classId) {
+        if (userId == null || userId == UNSET_TARGET_USER_ID) {
+            return;
+        }
+        userMapper.update(null, Wrappers.<SysUser>lambdaUpdate()
+                .eq(SysUser::getId, userId)
+                .eq(SysUser::getDeleted, 0)
+                .set(SysUser::getCollegeId, collegeId)
+                .set(classId != null, SysUser::getClassId, classId));
     }
 
     // ============ 字段审查（SPEC §8 异动规则集） ============
@@ -422,6 +526,66 @@ public class ChangeRequestService {
             issues.add(new FieldCheckIssue("payload", "VALUE_CHANGED", "变更内容无变化"));
         }
         return issues;
+    }
+
+    /**
+     * 目标范围校验（在 {@link #fieldCheck} 之上追加）：
+     *
+     * <ul>
+     *   <li><b>角色与类型一致</b>：type=student 的目标必须持有 STUDENT 角色，type=teacher 必须持有
+     *       TEACHER 角色。此前传错工号/学号也能通过字段审查；</li>
+     *   <li><b>提交范围</b>：非 ADMIN 提交人只能对本院（当前学期 user_semester_profile 归属）用户发起异动。
+     *       此前任何持有 {@code change:request:submit} 的教师可对任意 targetUserNo 发起异动，
+     *       管理员批量审批时极易误批。</li>
+     * </ul>
+     *
+     * <p>以字段审查错误（而非 400/403）表达，使逐条提交与批量导入行为一致：
+     * 逐条 → rejected + 错误原因；批量 → 该行计入错误明细，不中断整批。</p>
+     */
+    private List<FieldCheckIssue> withScopeCheck(List<FieldCheckIssue> issues, String type, SysUser target,
+                                                 Belonging before, CurrentUser current, Long semesterId) {
+        if (target == null) {
+            return issues; // 目标不存在已由 TARGET_EXISTS 覆盖
+        }
+        List<FieldCheckIssue> result = new ArrayList<>(issues);
+        if (TYPE_STUDENT.equals(type) || TYPE_TEACHER.equals(type)) {
+            String requiredRole = TYPE_STUDENT.equals(type) ? "STUDENT" : "TEACHER";
+            if (!rolesOf(target.getId()).contains(requiredRole)) {
+                result.add(new FieldCheckIssue("targetUserNo", "TARGET_ROLE_MISMATCH",
+                        TYPE_STUDENT.equals(type) ? "目标用户不是学生" : "目标用户不是教师"));
+            }
+        }
+        if (!current.isAdmin()) {
+            Long myCollege = profileMapper.selectCollegeId(current.userId(), semesterId);
+            if (myCollege == null) {
+                result.add(new FieldCheckIssue("targetUserNo", "TARGET_SCOPE",
+                        "当前账号在该学期没有学院归属，无法提交异动"));
+            } else if (!myCollege.equals(before.collegeId())) {
+                result.add(new FieldCheckIssue("targetUserNo", "TARGET_SCOPE",
+                        "只能对本院用户提交异动"));
+            }
+        }
+        return result;
+    }
+
+    /** 目标用户的角色码集合（sys_user_role → sys_role）。 */
+    private Set<String> rolesOf(Long userId) {
+        List<SysUserRole> userRoles = userRoleMapper.selectList(Wrappers.<SysUserRole>lambdaQuery()
+                .eq(SysUserRole::getUserId, userId)
+                .eq(SysUserRole::getDeleted, 0));
+        if (userRoles.isEmpty()) {
+            return Set.of();
+        }
+        List<Long> roleIds = userRoles.stream().map(SysUserRole::getRoleId).filter(Objects::nonNull).toList();
+        if (roleIds.isEmpty()) {
+            return Set.of();
+        }
+        return roleMapper.selectList(Wrappers.<SysRole>lambdaQuery()
+                        .in(SysRole::getId, roleIds)
+                        .eq(SysRole::getDeleted, 0))
+                .stream()
+                .map(SysRole::getRoleCode)
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     // ============ 记录构建 ============

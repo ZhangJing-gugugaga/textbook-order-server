@@ -6,10 +6,10 @@
     <select id="selectPageByFilter" resultType="com.tian.textbook.textbook.entity.Textbook">
         SELECT * FROM textbook
         WHERE deleted = 0
-        <if test="isbn != null and isbn != ''"> AND isbn LIKE CONCAT(#{isbn}, '%')</if>
-        <if test="title != null and title != ''"> AND title LIKE CONCAT('%', #{title}, '%')</if>
-        <if test="author != null and author != ''"> AND author LIKE CONCAT('%', #{author}, '%')</if>
-        <if test="press != null and press != ''"> AND press LIKE CONCAT('%', #{press}, '%')</if>
+        <if test="isbn != null and isbn != ''"> AND isbn LIKE CONCAT(#{isbn}, '%') ESCAPE '|'</if>
+        <if test="title != null and title != ''"> AND title LIKE CONCAT('%', #{title}, '%') ESCAPE '|'</if>
+        <if test="author != null and author != ''"> AND author LIKE CONCAT('%', #{author}, '%') ESCAPE '|'</if>
+        <if test="press != null and press != ''"> AND press LIKE CONCAT('%', #{press}, '%') ESCAPE '|'</if>
         <if test="status != null"> AND status = #{status}</if>
         ORDER BY id DESC
         LIMIT #{limit} OFFSET #{offset}
@@ -18,10 +18,10 @@
     <select id="countByFilter" resultType="long">
         SELECT COUNT(1) FROM textbook
         WHERE deleted = 0
-        <if test="isbn != null and isbn != ''"> AND isbn LIKE CONCAT(#{isbn}, '%')</if>
-        <if test="title != null and title != ''"> AND title LIKE CONCAT('%', #{title}, '%')</if>
-        <if test="author != null and author != ''"> AND author LIKE CONCAT('%', #{author}, '%')</if>
-        <if test="press != null and press != ''"> AND press LIKE CONCAT('%', #{press}, '%')</if>
+        <if test="isbn != null and isbn != ''"> AND isbn LIKE CONCAT(#{isbn}, '%') ESCAPE '|'</if>
+        <if test="title != null and title != ''"> AND title LIKE CONCAT('%', #{title}, '%') ESCAPE '|'</if>
+        <if test="author != null and author != ''"> AND author LIKE CONCAT('%', #{author}, '%') ESCAPE '|'</if>
+        <if test="press != null and press != ''"> AND press LIKE CONCAT('%', #{press}, '%') ESCAPE '|'</if>
         <if test="status != null"> AND status = #{status}</if>
     </select>
 </mapper>

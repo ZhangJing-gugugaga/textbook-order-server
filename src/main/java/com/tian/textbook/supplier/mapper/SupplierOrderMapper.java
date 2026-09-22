@@ -17,8 +17,9 @@ import java.util.List;
 @Mapper
 public interface SupplierOrderMapper {
 
-    /** active 学期 reviewed 教师表单明细（按学院分组的数据源） */
-    List<SupplierOrderRow> selectReviewedRows(@Param("semesterId") Long semesterId);
+    /** active 学期 reviewed 教师表单明细（按学院分组的数据源，行数受 limit 约束） */
+    List<SupplierOrderRow> selectReviewedRows(@Param("semesterId") Long semesterId,
+                                              @Param("limit") long limit);
 
     /** 预估行数（导出异步阈值判定，Q16） */
     long countReviewed(@Param("semesterId") Long semesterId);

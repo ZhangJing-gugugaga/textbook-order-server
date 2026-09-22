@@ -26,6 +26,13 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
     /** 每 500 行一个事务（SPEC §12） */
     public static final int FLUSH_SIZE = 500;
 
+    /**
+     * 错误明细条数上限：错误行全量保留会让 error_detail JSON 随行数线性膨胀
+     * （一次全错的万行导入即写入上万条明细，既撑爆列宽也拖垮批次查询）。
+     * 超出部分只计数不保留明细，收尾摘要给出「已截断」标记。
+     */
+    public static final int MAX_ERROR_DETAIL = 500;
+
     /** 行校验：返回 null 通过，否则返回错误文案（同时可向 ctx 记录停用比对范围） */
     @FunctionalInterface
     public interface RowValidator<T> {
@@ -48,6 +55,8 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
     private final List<NumberedRow<T>> buffer = new ArrayList<>();
     private int dataRows;
     private int okRows;
+    /** 被上限截断、只计数未保留明细的错误行数 */
+    private int truncatedErrors;
 
     public ImportReadListener(ImportRunContext ctx, ImportBatchMapper batchMapper, RowValidator<T> validator,
                               RowFlusher<T> flusher, BiConsumer<ImportRunContext, ImportRunSummary> finalizer) {
@@ -64,7 +73,7 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
         dataRows++;
         String error = validator.validate(data, excelRow, ctx);
         if (error != null) {
-            errors.add(errorEntry(excelRow, error));
+            addError(errorEntry(excelRow, error));
             return;
         }
         buffer.add(new NumberedRow<>(excelRow, data));
@@ -78,13 +87,13 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
         // 单元格转换等异常：记录行错误后继续解析（不中断，SPEC §10）
         int excelRow = context.readRowHolder() == null ? 0 : context.readRowHolder().getRowIndex() + 1;
         dataRows++;
-        errors.add(errorEntry(excelRow, "数据解析失败：" + exception.getMessage()));
+        addError(errorEntry(excelRow, "数据解析失败：" + exception.getMessage()));
     }
 
     @Override
     public void doAfterAllAnalysed(AnalysisContext context) {
         flush();
-        finalizer.accept(ctx, new ImportRunSummary(dataRows, okRows, errors));
+        finalizer.accept(ctx, new ImportRunSummary(dataRows, okRows, errors, truncatedErrors));
     }
 
     private void flush() {
@@ -100,10 +109,19 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
         } catch (Exception e) {
             // 整批回滚（事务在 writer 内），错误行继续收集（SPEC §12）
             for (NumberedRow<T> row : batch) {
-                errors.add(errorEntry(row.excelRow(), "导入失败：" + e.getMessage()));
+                addError(errorEntry(row.excelRow(), "导入失败：" + e.getMessage()));
             }
         }
         updateProgress();
+    }
+
+    /** 错误明细受 {@link #MAX_ERROR_DETAIL} 约束；超限只累加计数。 */
+    private void addError(Map<String, Object> entry) {
+        if (errors.size() < MAX_ERROR_DETAIL) {
+            errors.add(entry);
+        } else {
+            truncatedErrors++;
+        }
     }
 
     private void updateProgress() {

@@ -58,7 +58,7 @@ public class TeacherCourseService {
         Long semesterId = resolveSemesterId(request.semesterId());
         requireSemester(semesterId);
         requireTeacher(request.teacherId());
-        requireCourse(request.courseId());
+        requireCourse(request.courseId(), semesterId);
         requireClass(request.classId());
         if (teacherCourseMapper.selectExact(semesterId, request.teacherId(),
                 request.courseId(), request.classId()) != null) {
@@ -98,10 +98,21 @@ public class TeacherCourseService {
         }
     }
 
-    private void requireCourse(Long courseId) {
+    /**
+     * 课程必须存在，且必须属于当前学期。
+     *
+     * <p>课程是学期域数据（course.semester_id）。只校验存在性时，可以把 A 学期的课程
+     * 挂到 B 学期的任课关系上，之后 B 学期的教师征订会引用到跨学期的课程名，
+     * 导出与看板口径随之错乱。</p>
+     */
+    private void requireCourse(Long courseId, Long semesterId) {
         Course course = courseMapper.selectByIdSoft(courseId);
         if (course == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "课程不存在");
+        }
+        if (semesterId != null && course.getSemesterId() != null
+                && !semesterId.equals(course.getSemesterId())) {
+            throw new BizException(ErrorCode.PARAM_INVALID, "课程不属于当前学期，请先在本学期维护课程");
         }
     }
 

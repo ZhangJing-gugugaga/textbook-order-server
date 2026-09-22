@@ -2,7 +2,7 @@
 
 > 依据：PRD.md V1.1.0 / SPEC.md V1.0.0 / 03-后端开发计划与决策.md v3
 > 本文说明本次 MVP 已实现的功能范围、因 MVP 裁剪暂未包含的功能点、以及与文档的落地偏差。
-> **前后端联调接口手册见仓库根 [API.md](../API.md)**（92 端点、权限码、错误码、关键流程、联调注意事项）。
+> **前后端联调接口手册见仓库根 [API.md](../API.md)**（95 端点、权限码、错误码、关键流程、联调注意事项）。
 
 ## 一、实现范围（对照 PRD 功能列表）
 
@@ -75,11 +75,11 @@
 - 审计：登录/导出/账号操作/窗口变更/学期切换/审批/复核/配置变更全记录；按操作者/动作/资源/时间过滤 + 分页查询；只写不改、不含密码/token
 - 看板：各学院提交进度 / 窗口状态 / 待复核数 / 未确认通知数（`GET /api/admin/dashboard`）
 
-### 10. 验证目标（PRD 十三）对应测试（`./mvnw test`：140 用例 0 失败，3 跳过）
+### 10. 验证目标（PRD 十三）对应测试（`./mvnw test`：164 用例 0 失败，3 跳过）
 
 | 验证项 | 测试类 | 结果 |
 |--------|--------|------|
-| 越权矩阵（5 角色 × 资源 × 操作 → 403/404 + 审计） | `slice/auth/AuthorizationMatrixTest`（24 例：401 三类语义、首登拦截、多角色并集、公开路由） | 通过 |
+| 越权矩阵（5 角色 × 资源 × 操作 → 403/404 + 审计） | `slice/auth/AuthorizationMatrixTest`（30 例：401 三类语义、首登拦截、多角色并集、公开路由、联调新增端点权限） | 通过 |
 | 窗口引擎（自动开关/延长/提前截止 + 通知自动创建 + serverTime + 变更记录） | `integration/semester/WindowEngineIntegrationTest`（13 例，含关窗 409 与补正豁免/过期） | 通过 |
 | 双缓冲（原子切换 + version 冲突回滚 + 归属正确 + 同刻仅一个 active） | `integration/semester/SemesterDoubleBufferIntegrationTest`（4 例） | 通过 |
 | 教师征订 + 学生选购（字段审查逐字段回显、两级审核、清单 required/delisted、覆盖语义） | `integration/order/OrderFlowIntegrationTest`（16 例） | 通过 |
@@ -127,4 +127,4 @@
 
 ## 四、验证结果
 
-`./mvnw test`（完整非过滤）：**140 用例，0 失败，0 错误，3 跳过**（性能用例默认禁用 + Testcontainers 无 Docker 门控跳过），BUILD SUCCESS。测试清单见第十节表格。
+`./mvnw test`（完整非过滤）：**164 用例，0 失败，0 错误，3 跳过**（性能用例默认禁用 + Testcontainers 无 Docker 门控跳过），BUILD SUCCESS。测试清单见第十节表格。

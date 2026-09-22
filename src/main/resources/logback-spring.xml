@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
   <property name="LOG_HOME" value="${TEXTBOOK_LOG_DIR:-./logs}"/>
+  <!-- %X{traceId}：请求链路标识（TraceIdFilter 写入 MDC，未在请求线程时为空） -->
   <property name="LOG_PATTERN"
-            value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+            value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-}] %-5level %logger{36} - %msg%n"/>
 
   <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
     <encoder>

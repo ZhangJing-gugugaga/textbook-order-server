@@ -18,6 +18,8 @@ import com.tian.textbook.semester.mapper.UserSemesterProfileMapper;
 import com.tian.textbook.support.IntegrationTestBase;
 import com.tian.textbook.support.TestDataSeeder;
 import com.tian.textbook.support.TestSecurity;
+import com.tian.textbook.system.entity.SysUser;
+import com.tian.textbook.system.mapper.SysUserMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -27,6 +29,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import java.io.ByteArrayOutputStream;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,6 +51,8 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
     private SemesterMapper semesterMapper;
     @Autowired
     private UserSemesterProfileMapper profileMapper;
+    @Autowired
+    private SysUserMapper userMapper;
     @Autowired
     private TestDataSeeder seeder;
 
@@ -126,6 +131,53 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
         UserSemesterProfile profile = profileMapper.selectByUserAndSemester(student1, semesterId);
         assertThat(profile.getCollegeId()).isEqualTo(collegeB);
         assertThat(profile.getClassId()).isEqualTo(classB);
+        // sys_user 冗余列同写（/api/me 与 /api/admin/user 的数据来源，SPEC §7）
+        SysUser user = userMapper.selectByIdSoft(student1);
+        assertThat(user.getCollegeId()).isEqualTo(collegeB);
+        assertThat(user.getClassId()).isEqualTo(classB);
+    }
+
+    @Test
+    @DisplayName("教师异动审批通过：profile 与 sys_user 冗余列只改学院、不动班级")
+    void approveTeacherChange_syncsCollegeOnly() {
+        seed();
+        var teacher = seeder.user("TH9", "教师九", "13800000099", collegeA, null, 1, 0, 1, "TEACHER");
+        seeder.profile(teacher.getId(), semesterId, collegeA, null);
+
+        var submitted = changeRequestService.submit(new ChangeSubmitRequest(
+                "teacher", "TH9", collegeB, null));
+        assertThat(submitted.getStatus()).isEqualTo("pending_review");
+
+        var admin = seeder.user("AD9", "超管", "13800000098", null, null, 1, 0, 1, "ADMIN");
+        TestSecurity.authenticate(admin.getId(), "AD9", "超管", Set.of("ADMIN"), "ADMIN",
+                seeder.permissionsOf("ADMIN"));
+        changeRequestService.review(submitted.getId(), new ChangeReviewRequest("pass", null));
+
+        assertThat(profileMapper.selectByUserAndSemester(teacher.getId(), semesterId).getCollegeId())
+                .isEqualTo(collegeB);
+        SysUser reloaded = userMapper.selectByIdSoft(teacher.getId());
+        assertThat(reloaded.getCollegeId()).isEqualTo(collegeB);
+        assertThat(reloaded.getClassId()).isNull();
+    }
+
+    @Test
+    @DisplayName("org-options：返回学院/班级只读选项（仅 id + 名称 + majorId，不含人数等管理字段）")
+    void orgOptions_returnsReadOnlyOptions() {
+        seed();
+
+        Map<String, Object> options = changeRequestService.orgOptions();
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> colleges = (List<Map<String, Object>>) options.get("colleges");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> classes = (List<Map<String, Object>>) options.get("classes");
+        assertThat(colleges).hasSize(2);
+        assertThat(colleges).allSatisfy(c -> assertThat(c).containsOnlyKeys("id", "name"));
+        assertThat(colleges).extracting(c -> c.get("name"))
+                .containsExactly("计算机学院", "外语学院");
+        assertThat(classes).hasSize(2);
+        assertThat(classes).allSatisfy(c -> assertThat(c).containsOnlyKeys("id", "name", "majorId"));
+        assertThat(classes).extracting(c -> c.get("id")).containsExactly(classA, classB);
     }
 
     @Test

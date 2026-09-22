@@ -1,9 +1,11 @@
 package com.tian.textbook.system.user;
 
+import com.tian.textbook.common.util.AppTime;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.tian.textbook.auth.AuthUserService;
 import com.tian.textbook.common.PageResponse;
 import com.tian.textbook.common.error.BizException;
+import com.tian.textbook.common.util.SqlLike;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.system.audit.AuditService;
 import com.tian.textbook.system.dto.UserListItem;
@@ -52,15 +54,16 @@ public class UserService {
     @Transactional(readOnly = true)
     public PageResponse<UserListItem> page(String roleCode, Long collegeId, Integer status,
                                            String keyword, long page, long size) {
-        long safeSize = Math.min(Math.max(size, 1), 200);
-        long offset = (Math.max(page, 1) - 1) * safeSize;
+        keyword = SqlLike.escape(keyword);
+        long safeSize = PageResponse.normalizeSize(size);
+        long offset = (PageResponse.normalizePage(page) - 1) * safeSize;
         List<UserListItem> list = userMapper.selectPageByFilter(roleCode, collegeId, status, keyword, offset, safeSize);
         long total = userMapper.countByFilter(roleCode, collegeId, status, keyword);
         // 角色回填（页大小 ≤200，逐条查询可接受）
         for (UserListItem item : list) {
             item.setRoles(authUserService.loadRoles(item.getId()).stream().map(SysRole::getRoleCode).toList());
         }
-        return PageResponse.of(list, Math.max(page, 1), safeSize, total);
+        return PageResponse.of(list, PageResponse.normalizePage(page), safeSize, total);
     }
 
     /**
@@ -158,7 +161,7 @@ public class UserService {
 
     private void upsertProfile(Long userId, Long semesterId, Long collegeId, Long classId) {
         UserSemesterProfile existing = profileMapper.selectByUserAndSemester(userId, semesterId);
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = AppTime.now();
         if (existing == null) {
             UserSemesterProfile profile = new UserSemesterProfile();
             profile.setUserId(userId);
@@ -179,10 +182,20 @@ public class UserService {
         }
     }
 
+    /**
+     * 建号请求。
+     *
+     * <p>phone 用中国大陆手机号段校验（{@code 1[3-9]\d{9}}）而非 {@code \d{5,20}}：
+     * 手机号后 4 位是首登校验的唯一凭据，格式宽松会让「后 4 位」失去可核验性
+     * （乱填的号码也能建号，之后无法完成首登）。</p>
+     */
     public record CreateUserRequest(
-            @jakarta.validation.constraints.NotBlank(message = "学号/工号不能为空") String userNo,
-            @jakarta.validation.constraints.NotBlank(message = "姓名不能为空") String name,
-            String phone,
+            @jakarta.validation.constraints.NotBlank(message = "学号/工号不能为空")
+            @jakarta.validation.constraints.Size(max = 32, message = "学号/工号不能超过 32 字符") String userNo,
+            @jakarta.validation.constraints.NotBlank(message = "姓名不能为空")
+            @jakarta.validation.constraints.Size(max = 64, message = "姓名不能超过 64 字符") String name,
+            @jakarta.validation.constraints.Pattern(regexp = "^$|^1[3-9]\\d{9}$",
+                    message = "手机号格式不正确") String phone,
             Long collegeId,
             Long classId,
             @jakarta.validation.constraints.NotEmpty(message = "请至少分配一个角色") List<String> roleCodes) {

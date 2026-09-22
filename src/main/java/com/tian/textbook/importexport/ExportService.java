@@ -32,4 +32,15 @@ public interface ExportService {
      * @return 可下载的导出任务（filePath 已生成）
      */
     ExportTask claimDownload(Long taskId, String token);
+
+    /**
+     * 供货商侧任务读取：在归属校验（created_by=本人，ADMIN 放行）之上追加 bizType=supplier 白名单。
+     *
+     * <p>export_task 与内部导出任务共表且主键自增，仅按 id 取任务时任一供货商账号即可
+     * 枚举读取内部任务（教师征订/学生选购/通知汇总）元数据，叠加 token 下发即越权下载。</p>
+     */
+    ExportTask getSupplierTask(Long taskId);
+
+    /** 供货商一次性下载（归属校验 + bizType 白名单 + token 校验消费）。 */
+    ExportTask claimSupplierDownload(Long taskId, String token);
 }

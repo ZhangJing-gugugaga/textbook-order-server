@@ -63,4 +63,10 @@
         WHERE nr.task_id = #{taskId} AND nr.deleted = 0
         ORDER BY nr.user_id, nr.round_no
     </select>
+
+    <!-- 与 selectTaskSummaryRows 同口径的 COUNT（导出阈值判定用，避免为比较一次阈值物化全量结果） -->
+    <select id="countTaskSummaryRows" resultType="long">
+        SELECT COUNT(1) FROM notice_record nr
+        WHERE nr.task_id = #{taskId} AND nr.deleted = 0
+    </select>
 </mapper>

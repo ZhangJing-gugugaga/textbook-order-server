@@ -19,6 +19,18 @@ public interface NoticeRecordMapper extends BaseMapper<NoticeRecord> {
     @Select("SELECT * FROM notice_record WHERE task_id = #{taskId} AND user_id = #{userId} AND deleted = 0 ORDER BY round_no")
     List<NoticeRecord> selectByTaskAndUser(@Param("taskId") Long taskId, @Param("userId") Long userId);
 
+    /**
+     * 本人在指定任务集合上的确认记录（confirmed_at 非空、deleted=0）。
+     * 「我的通知」批量取确认时间，避免逐任务查询（任务数 = 学期任务数）。
+     */
+    @Select("<script>"
+            + "SELECT * FROM notice_record WHERE user_id = #{userId} AND confirmed_at IS NOT NULL "
+            + "AND deleted = 0 AND task_id IN "
+            + "<foreach collection='taskIds' item='taskId' open='(' separator=',' close=')'>#{taskId}</foreach>"
+            + "</script>")
+    List<NoticeRecord> selectConfirmedByUserAndTasks(@Param("userId") Long userId,
+                                                     @Param("taskIds") java.util.Collection<Long> taskIds);
+
     @Select("SELECT COALESCE(MAX(round_no), 0) FROM notice_record WHERE task_id = #{taskId} AND deleted = 0")
     Integer selectMaxRoundNo(@Param("taskId") Long taskId);
 
@@ -54,4 +66,7 @@ public interface NoticeRecordMapper extends BaseMapper<NoticeRecord> {
      */
     List<java.util.Map<String, Object>> selectTaskSummaryRows(@Param("taskId") Long taskId,
                                                               @Param("semesterId") Long semesterId);
+
+    /** 与 {@link #selectTaskSummaryRows} 同口径的 COUNT（导出阈值判定用，避免物化全量结果）。 */
+    long countTaskSummaryRows(@Param("taskId") Long taskId, @Param("semesterId") Long semesterId);
 }

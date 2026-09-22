@@ -12,8 +12,10 @@ public class TextbookProperties {
 
     private final Security security = new Security();
     private final Jwt jwt = new Jwt();
+    private final Cors cors = new Cors();
     private final Import importConfig = new Import();
     private final Export export = new Export();
+    private final Async async = new Async();
     private final Weixin weixin = new Weixin();
 
     @Data
@@ -29,6 +31,12 @@ public class TextbookProperties {
         private int lockMinutes = 15;
         /** 同 IP/账号维度限频（次/分钟，Caffeine 加速） */
         private int ratePerMinute = 10;
+        /**
+         * 可信反向代理地址（逗号分隔 IP）。只有来自这些地址的 X-Forwarded-For 才被采信，
+         * 否则一律以 remoteAddr 为准（防 XFF 伪造绕过限频 / 伪造审计 IP）。
+         * 生产应为 Nginx 所在主机地址（同机部署填 127.0.0.1,::1）。
+         */
+        private String trustedProxies = "";
     }
 
     @Data
@@ -39,6 +47,16 @@ public class TextbookProperties {
         private int refreshDays = 7;
         /** 签名密钥（环境变量 JWT_SECRET，≥32 字节随机） */
         private String secret;
+    }
+
+    @Data
+    public static class Cors {
+        /**
+         * 跨域来源白名单（逗号分隔的完整 origin，如 {@code https://moonzj.com}）。
+         * 默认空 = 不返回任何 CORS 头：Web 端经 Nginx 同域反代，小程序端请求不受 CORS 约束。
+         * 严禁配置为 {@code *}（配合 allowCredentials 会让任意站点带凭证读取响应）。
+         */
+        private String allowedOrigins = "";
     }
 
     @Data
@@ -66,6 +84,17 @@ public class TextbookProperties {
         private int downloadTokenMinutes = 10;
         /** 文件保留小时数 */
         private int retentionHours = 24;
+    }
+
+    @Data
+    public static class Async {
+        /**
+         * 启动时是否回收上次进程遗留的 running/queued 任务（默认开）。
+         *
+         * <p>单实例部署保持默认即可。多实例（滚动发布）应置 false：新实例启动时
+         * 会把旧实例正在执行的任务误判为遗留。彻底方案是 owner_instance + 实例心跳。</p>
+         */
+        private boolean recoverOnStartup = true;
     }
 
     @Data

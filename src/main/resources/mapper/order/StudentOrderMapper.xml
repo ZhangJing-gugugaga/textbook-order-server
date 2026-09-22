@@ -8,6 +8,7 @@
         p.college_id AS collegeId, c.name AS collegeName,
         p.class_id AS classId, sc.name AS className,
         o.status, o.submitted_at, o.submit_snapshot,
+        (SELECT COUNT(1) FROM student_order_item i WHERE i.order_id = o.id AND i.deleted = 0) AS itemCount,
         (SELECT COALESCE(SUM(i.quantity), 0) FROM student_order_item i WHERE i.order_id = o.id AND i.deleted = 0) AS totalQuantity
     </sql>
 
@@ -30,7 +31,7 @@
                         WHERE p4.user_id = o.student_id AND p4.semester_id = o.semester_id
                           AND p4.class_id = #{classId} AND p4.deleted = 0)
         </if>
-        <if test="studentName != null and studentName != ''"> AND u.name LIKE CONCAT(#{studentName}, '%')</if>
+        <if test="studentName != null and studentName != ''"> AND u.name LIKE CONCAT(#{studentName}, '%') ESCAPE '|'</if>
         ORDER BY o.submitted_at DESC, o.id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
@@ -50,6 +51,6 @@
                         WHERE p4.user_id = o.student_id AND p4.semester_id = o.semester_id
                           AND p4.class_id = #{classId} AND p4.deleted = 0)
         </if>
-        <if test="studentName != null and studentName != ''"> AND u.name LIKE CONCAT(#{studentName}, '%')</if>
+        <if test="studentName != null and studentName != ''"> AND u.name LIKE CONCAT(#{studentName}, '%') ESCAPE '|'</if>
     </select>
 </mapper>

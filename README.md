@@ -2,7 +2,7 @@
 
 > Spring Boot 3 单体服务：RBAC 五角色数据隔离、征订窗口引擎、学期数据双缓冲、教师两级审查、学生选购、异动审批、通知确认闭环、Excel 异步导入导出、供货商只读接口。
 >
-> 需求见 [PRD.md](PRD.md)，实现规格见 [SPEC.md](SPEC.md)，开发计划见 [03-后端开发计划与决策.md](03-后端开发计划与决策.md)，**前后端联调接口手册见 [API.md](API.md)**（92 端点/权限码/错误码/关键流程），本次 MVP 实现范围与裁剪点见 [docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)，部署见 [docs/deployment.md](docs/deployment.md)。
+> 需求见 [PRD.md](PRD.md)，实现规格见 [SPEC.md](SPEC.md)，开发计划见 [03-后端开发计划与决策.md](03-后端开发计划与决策.md)，**前后端联调接口手册见 [API.md](API.md)**（95 端点/权限码/错误码/关键流程），本次 MVP 实现范围与裁剪点见 [docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)，部署见 [docs/deployment.md](docs/deployment.md)。
 >
 > **进度状态（rpd）**：功能进度清单/决策/阻塞见 [.project-state.md](.project-state.md)；会话活跃上下文与下一步见 [.rpd/active-context.md](.rpd/active-context.md)。
 
@@ -19,15 +19,24 @@ mysql -uroot -p -e "CREATE DATABASE textbook_order DEFAULT CHARSET utf8mb4;"
 # 2) 本地 profile 启动（自动执行 db/schema.sql + data-permission.sql + data-seed.sql）
 export DB_URL='jdbc:mysql:<SECRET_824596b7>'
 export DB_USERNAME=root DB_PASSWORD=root
-export JWT_SECRET='请替换为至少32字节随机串'
+export JWT_SECRET='请替换为至少32字节随机串（openssl rand -base64 48）'
+export SPRING_PROFILES_ACTIVE=local      # 必填：无默认 profile，缺失即启动失败
 ./mvnw spring-boot:run          # Windows: mvnw.cmd spring-boot:run
 
 # 3) 打可执行 jar
 ./mvnw clean package -DskipTests
-java -Duser.timezone=Asia/Shanghai -jar target/textbook-order-server.jar --spring.profiles.active=trial
+java -jar target/textbook-order-server.jar --spring.profiles.active=trial
 ```
 
-其他 profile：`local`（自动建库，仅限全新空库）/ `trial`（试运行）/ `school`（移交学校）。生产环境 DB 初始化由 DBA 手动执行 `src/main/resources/db/` 下三个脚本（部署手册交付物）。
+其他 profile：`local`（自动建库，仅限全新空库）/ `trial`（试运行）/ `school`（移交学校）。
+生产环境 DB 初始化由 DBA 手动执行 `src/main/resources/db/` 下的 `schema.sql` + `data-permission.sql`
+（**不执行** `data-seed.sql`，它含已知口令的测试账号；部署手册交付物）。
+
+### 启动自检（fail-fast）
+
+服务在启动期断言必填配置，不满足即中止（详见 [docs/deployment.md §3.1](docs/deployment.md)）：
+未指定 `SPRING_PROFILES_ACTIVE`、`JWT_SECRET` 缺失/过短/命中仓库内公开弱值、导出临时目录不可写
+——三者任一不满足都直接启动失败，不会静默降级。
 
 ## 环境变量（SPEC §13，不硬编码）
 
@@ -37,8 +46,13 @@ java -Duser.timezone=Asia/Shanghai -jar target/textbook-order-server.jar --sprin
 | `JWT_SECRET` | access/refresh 签名密钥（≥32 字节随机） |
 | `WX_MINIAPP_APPID` / `WX_MINIAPP_SECRET` | 小程序 code2session / 订阅消息 |
 | `WX_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 id（未配置时重发记 unauthorized，W5/R10） |
-| `TZ` / JVM `-Duser.timezone` | `Asia/Shanghai`（窗口判定双保险） |
-| `SPRING_PROFILES_ACTIVE` | local / trial / school |
+| `TEXTBOOK_EXPORT_TMP` | 导出/导入临时目录（生产请用绝对路径，默认 `./data/export`） |
+| `TEXTBOOK_LOG_DIR` | 日志目录（默认 `./logs`） |
+| `TEXTBOOK_CORS_ORIGINS` | 跨域来源白名单（逗号分隔完整 origin，默认空 = 不返回 CORS 头；严禁 `*`） |
+| `TEXTBOOK_TRUSTED_PROXIES` | 可信反向代理 IP（默认空 = 不采信 `X-Forwarded-For`；同机 Nginx 填 `127.0.0.1,::1`） |
+| `SPRINGDOC_ENABLED` | 是否开放 `/swagger-ui.html` 与 `/v3/api-docs`（默认 false，仅 local 默认开） |
+| `TZ` | `Asia/Shanghai`（业务时间已统一走 `AppTime`，此项作第三方库兜底） |
+| `SPRING_PROFILES_ACTIVE` | **必填**：local / trial / school |
 
 ## 测试账号（种子数据 · 初始密码 = 学号/工号后 6 位）
 
@@ -72,14 +86,14 @@ java -Duser.timezone=Asia/Shanghai -jar target/textbook-order-server.jar --sprin
 ## 测试
 
 ```bash
-./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检（140 用例）
+./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检（187 用例）
 ./mvnw test -Drun.mysql.tests=true   # Docker 可用时追加 Testcontainers(MySQL) 集成用例
 ```
 
-- 单元（32 例）：字段审查 6 规则 × 边界（含数量上限回退、ISBN 校验位）、导出阈值、配置白名单、窗口状态机
-- 切片（24 例）：5 角色 × 资源 × 操作越权矩阵（100% 拒绝 + 审计）、401 三类语义、must_change_password 拦截、多角色并集
-- 集成（60 例，H2 MySQL 模式）：双缓冲原子切换（含 version 冲突回滚）、窗口自动开关幂等、导入批次与停用比对、重提覆盖、confirm 幂等、一次性 token 410
-- 机检（5 例）：ArchUnit —— supplier 包禁 import 学生/教师 Mapper、common 包禁 import 业务 Mapper、Controller 禁直连 Mapper
+- 单元（65 例）：字段审查 6 规则 × 边界（含数量上限回退、ISBN 校验位）、导出阈值、配置白名单、窗口状态机、数据隔离条件构建（多角色 OR 并集 + fail-closed 默认拒绝）、JWT 密钥强度自检、客户端 IP 可信代理解析、LIKE 通配符转义
+- 切片（30 例）：5 角色 × 资源 × 操作越权矩阵（100% 拒绝 + 审计）、401 三类语义、must_change_password 拦截、多角色并集、联调新增端点权限
+- 集成（92 例，H2 MySQL 模式）：双缓冲原子切换（含 version 冲突回滚）、窗口自动开关幂等、导入批次与停用比对、**真实 HTTP multipart 上传**（相对 tmp-dir 落盘回归防护）、重提覆盖、confirm 幂等、一次性 token 410、JSON 列读回（submit_snapshot / detail_json）、**越权修复回归**（供货商导出 IDOR / 秘书跨院导出 / 异动跨学期审批 / 通知 target_roles 定向 / 异动目标范围）
+- 机检（7 例）：ArchUnit + 数据隔离护栏 —— supplier 包禁 import 学生/教师 Mapper、common 包禁 import 业务 Mapper、Controller 禁直连 Mapper、按用户维度的 Mapper 方法必须声明隔离口径
 - 性能（默认禁用）：1 万行导入样本实测 169s（≤5 分钟，W22）
 
 ## 工程结构（SPEC §2）
@@ -103,4 +117,6 @@ src/main/java/com/tian/textbook/
 
 ## 部署
 
-Nginx 反代 + systemd 守护 + MySQL 每日备份的配置模板与移交检查单见 SPEC §15 与 [docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)。
+Nginx 反代 + systemd 守护 + MySQL 每日备份的配置模板、环境变量清单（含必填项与启动自检）与移交检查单见 [docs/deployment.md](docs/deployment.md)。
+
+可观测性：`GET /actuator/health`（含 db 与磁盘空间）；每个请求生成/透传 `X-Request-Id` 并写入日志 MDC，前端报错可带上该 id 以便串联排查。

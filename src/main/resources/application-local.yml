@@ -1,4 +1,5 @@
-# 本地开发：启动时自动执行 db/schema.sql + 权限码种子 + 种子数据（首次建库）
+# 本地开发：显式选择本 profile 才建库并灌种子数据（SPRING_PROFILES_ACTIVE=local）。
+# 生产/试运行严禁使用本 profile：data-seed.sql 内含已知口令的测试账号（含超管）。
 spring:
   sql:
     init:
@@ -9,7 +10,16 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:mysql:<SECRET_824596b7>}
 
+springdoc:
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:true}
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:true}
+
 textbook:
+  jwt:
+    # 本地开发密钥（仅 local profile；生产由 trial/school profile 强制注入 JWT_SECRET）
+    secret: ${JWT_SECRET:local-dev-only-insecure-secret-key-32bytes}
   export:
     tmp-dir: ${TEXTBOOK_EXPORT_TMP:./data/export}
 

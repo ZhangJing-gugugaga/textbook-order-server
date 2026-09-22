@@ -27,4 +27,14 @@
         <if test="collegeId != null"> AND p.college_id = #{collegeId}</if>
         ORDER BY c.name, u.name, i.class_id
     </select>
+
+    <!-- 与 selectReviewedItems 同口径的 COUNT（导出阈值判定用，避免为比较一次阈值而物化全量结果） -->
+    <select id="countReviewedItems" resultType="long">
+        SELECT COUNT(1)
+        FROM order_form_item i
+        JOIN order_form f ON f.id = i.form_id AND f.deleted = 0 AND f.status = 'reviewed'
+        LEFT JOIN user_semester_profile p ON p.user_id = f.teacher_id AND p.semester_id = f.semester_id AND p.deleted = 0
+        WHERE i.deleted = 0 AND f.semester_id = #{semesterId}
+        <if test="collegeId != null"> AND p.college_id = #{collegeId}</if>
+    </select>
 </mapper>

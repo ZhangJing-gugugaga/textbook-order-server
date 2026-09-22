@@ -7,8 +7,8 @@
 ## 上次进度（2026-09-21 收尾）
 
 - **MVP 已完成**：PRD 九大模块全部实现（认证/RBAC 隔离/窗口引擎/双缓冲/导入导出/两级审查/学生选购/异动审批/通知闭环/配置审计/供货商只读/看板）
-- **质量门**：`./mvnw clean package` 通过；140 用例 0 失败（单元 32 / 切片 24 / 集成 60 / ArchUnit 5；跳过 3 = 性能默认禁用 + Testcontainers 无 Docker）
-- **联调交付**：`API.md`（92 端点 + 权限码 + 错误码 + 关键流程），与代码程序化交叉校验 100% 一致；OpenAPI 3 = `/v3/api-docs`
+- **质量门**：`./mvnw clean package` 通过；164 用例 0 失败（单元 54 / 切片 30 / 集成 75 / ArchUnit 5；跳过 3 = 性能默认禁用 + Testcontainers 无 Docker）
+- **联调交付**：`API.md`（95 端点 + 权限码 + 错误码 + 关键流程），与代码程序化交叉校验 100% 一致；OpenAPI 3 = `/v3/api-docs`
 - **运维交付**：`docs/deployment.md`（Nginx/systemd/mysqldump 备份/移交检查单）
 - **安全扫描**：8 条 `.gitignore` 缺项已修复；4 条 SEC-007 确证误报（Java `Map.put/get` 的变量名尾字母 `r` 命中 Express 路由正则，真实鉴权由 Security 链 + `@PreAuthorize` 承担，越权矩阵已验证）
 - **测试账号**：18 个种子账号，五角色各 ≥3 且三态齐备（正常/首登待改密/停用）；本轮补齐供货商 600003（首登待改密）后已实跑校验（H2 执行 data-seed.sql 逐角色计数通过）

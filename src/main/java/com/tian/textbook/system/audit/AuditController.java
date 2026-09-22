@@ -12,7 +12,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 
 /**
  * 审计日志查询（W24 / SPEC §11.5：按操作者/动作/资源/时间过滤 + 分页；只读）。
@@ -46,13 +45,8 @@ public class AuditController {
             throw new com.tian.textbook.common.error.BizException(
                     com.tian.textbook.common.error.ErrorCode.PARAM_INVALID, "时间范围不正确");
         }
-        long safeSize = Math.min(Math.max(size, 1), 200);
-        long offset = (Math.max(page, 1) - 1) * safeSize;
-        List<AuditLog> list = auditService.query(userId, userNo, action, resource, start, end);
-        // selectByFilter 返回全量匹配，此处按分页窗口截断（数据量为审计级，可接受）
-        int from = (int) Math.min(offset, list.size());
-        int to = (int) Math.min(offset + safeSize, list.size());
-        return ApiResponse.ok(PageResponse.of(list.subList(from, to), Math.max(page, 1), safeSize, list.size()));
+        // 分页下推到 SQL（审计表只增不减，全量取出再内存截断会形成内存尖峰）
+        return ApiResponse.ok(auditService.query(userId, userNo, action, resource, start, end, page, size));
     }
 
     private LocalDateTime parse(String value) {

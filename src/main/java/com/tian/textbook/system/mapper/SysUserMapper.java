@@ -18,9 +18,21 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
     @Select("SELECT * FROM sys_user WHERE id = #{id} AND deleted = 0")
     SysUser selectByIdSoft(@Param("id") Long id);
 
-    /** 登录失败计数 +1（落库，W20） */
-    @Update("UPDATE sys_user SET fail_count = fail_count + 1, updated_at = NOW(3) WHERE id = #{id}")
+    /**
+     * 登录失败计数 +1（落库，W20）。
+     *
+     * <p>单条 {@code SET fail_count = fail_count + 1} 由数据库行锁串行化，并发登录失败不会
+     * 互相覆盖计数（此前的「先 SELECT 读初值、再 UPDATE 写初值+1」会丢失更新，可突破 max-fail）。
+     * 调用方随后用 {@link #selectFailCount} 读取自增后的值判定是否锁定：读到的值只可能
+     * ≥ 本次实际失败次数，故最多提前一次触发锁定，方向安全。</p>
+     */
+    @Update("UPDATE sys_user SET fail_count = fail_count + 1, updated_at = NOW(3) "
+            + "WHERE id = #{id} AND deleted = 0")
     int incrFailCount(@Param("id") Long id);
+
+    /** 当前失败计数（{@link #incrFailCount} 之后读取，用于判定锁定阈值）。 */
+    @Select("SELECT COALESCE(fail_count, 0) FROM sys_user WHERE id = #{id}")
+    int selectFailCount(@Param("id") Long id);
 
     @Update("UPDATE sys_user SET fail_count = 0, lock_until = #{lockUntil}, updated_at = NOW(3) WHERE id = #{id}")
     int resetFailCountAndLock(@Param("id") Long id, @Param("lockUntil") java.time.LocalDateTime lockUntil);

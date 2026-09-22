@@ -1,5 +1,7 @@
 package com.tian.textbook.system.audit;
 
+import com.tian.textbook.common.PageResponse;
+import com.tian.textbook.common.util.SqlLike;
 import com.tian.textbook.common.SecurityUtils;
 import com.tian.textbook.common.util.IpUtils;
 import com.tian.textbook.system.entity.AuditLog;
@@ -43,29 +45,50 @@ public class AuditService {
     }
 
     /**
-     * 审计查询（W24：按操作者/动作/资源/时间过滤，at DESC；分页由调用方截断）。
+     * 审计查询（W24：按操作者/动作/资源/时间过滤，at DESC），DB 侧分页。
      *
-     * <p>Controller 不直连 Mapper（SPEC §2 分层约束），查询收敛在 Service。</p>
+     * <p>Controller 不直连 Mapper（SPEC §2 分层约束），查询收敛在 Service。
+     * 分页下推到 SQL：审计表只增不减，全量取出再内存截断会形成内存尖峰。</p>
      */
     @Transactional(readOnly = true)
-    public List<AuditLog> query(Long userId, String userNo, String action, String resource,
-                                java.time.LocalDateTime startAt, java.time.LocalDateTime endAt) {
-        return auditLogMapper.selectByFilter(userId, userNo, action, resource, startAt, endAt);
+    public PageResponse<AuditLog> query(Long userId, String userNo, String action, String resource,
+                                        java.time.LocalDateTime startAt, java.time.LocalDateTime endAt,
+                                        long page, long size) {
+        long safePage = PageResponse.normalizePage(page);
+        long safeSize = PageResponse.normalizeSize(size);
+        long offset = (safePage - 1) * safeSize;
+        // XML 已写 ESCAPE '|'，此处同步转义（否则输入 % 退化为全表扫描）
+        String kwUserNo = SqlLike.escape(userNo);
+        List<AuditLog> list = auditLogMapper.selectByFilter(
+                userId, kwUserNo, action, resource, startAt, endAt, offset, safeSize);
+        long total = auditLogMapper.countByFilter(userId, kwUserNo, action, resource, startAt, endAt);
+        return PageResponse.of(list, safePage, safeSize, total);
     }
 
-    /** 与业务操作同事务（关键动作：审批/切换/复核/配置/账号/窗口变更）。 */
+    /**
+     * 与业务操作同事务（关键动作：审批/切换/复核/配置/账号/窗口变更）。
+     *
+     * <p>审计写入失败<b>不再吞掉</b>：调用点（如 TeacherOrderService.review）的契约是
+     * 「更新 order_form 与写 audit_log 同事务」，若在此吞异常，审批会照常提交而合规记录
+     * 静默缺失——事后无法证明谁批过。异常向上抛出即触发整个业务事务回滚。</p>
+     */
     @Transactional(propagation = Propagation.REQUIRED)
     public void record(String action, String resource, String resourceId, Map<String, Object> detail) {
-        write(action, resource, resourceId, detail);
+        write(action, resource, resourceId, detail, true);
     }
 
-    /** 独立事务（@AuditLog 切面使用：标注方法无外层事务或只读场景）。 */
+    /**
+     * 独立事务（@AuditLog 切面使用：标注方法无外层事务或只读场景）。
+     *
+     * <p>切面场景下审计是旁路观测，失败只告警不阻断业务调用。</p>
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordIndependent(String action, String resource, String resourceId, Map<String, Object> detail) {
-        write(action, resource, resourceId, detail);
+        write(action, resource, resourceId, detail, false);
     }
 
-    private void write(String action, String resource, String resourceId, Map<String, Object> detail) {
+    private void write(String action, String resource, String resourceId, Map<String, Object> detail,
+                       boolean failFast) {
         try {
             AuditLog log = new AuditLog();
             var user = SecurityUtils.currentUser();
@@ -79,9 +102,13 @@ public class AuditService {
             log.setDetailJson(detail);
             log.setIp(IpUtils.currentIp());
             auditLogMapper.insert(log);
-        } catch (Exception e) {
-            // 审计失败不阻断业务（关键动作已由同事务保证）；此处兜底记录
-            log.warn("审计写入失败: action={}, resource={}", action, resource, e);
+        } catch (RuntimeException e) {
+            if (failFast) {
+                // 与业务同事务：让异常传播，业务操作一并回滚（宁可拒绝操作，不可无留痕）
+                log.error("审计写入失败，业务操作已回滚: action={}, resource={}", action, resource, e);
+                throw e;
+            }
+            log.warn("审计写入失败（旁路，不阻断业务）: action={}, resource={}", action, resource, e);
         }
     }
 }

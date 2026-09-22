@@ -30,4 +30,7 @@ public interface StudentOrderItemMapper extends BaseMapper<StudentOrderItem> {
      * 异动不影响历史归属，W15）。
      */
     List<com.tian.textbook.order.dto.StudentOrderSummaryRow> selectSummaryRows(@Param("semesterId") Long semesterId);
+
+    /** 与 {@link #selectSummaryRows} 同口径的 COUNT（导出阈值判定用，避免物化全量结果）。 */
+    long countSummaryRows(@Param("semesterId") Long semesterId);
 }

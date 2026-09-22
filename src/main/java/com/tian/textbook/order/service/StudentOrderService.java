@@ -1,11 +1,13 @@
 package com.tian.textbook.order.service;
 
+import com.tian.textbook.common.util.AppTime;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.tian.textbook.common.CurrentUser;
 import com.tian.textbook.common.PageResponse;
 import com.tian.textbook.common.SecurityUtils;
 import com.tian.textbook.common.annotation.WithinWindow;
 import com.tian.textbook.common.error.BizException;
+import com.tian.textbook.common.util.SqlLike;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.semester.SemesterContextHolder;
 import com.tian.textbook.common.window.WindowGuard;
@@ -195,7 +197,7 @@ public class StudentOrderService {
 
         // upsert（一人一学期一单，W9 唯一约束兜底）
         StudentOrder order = studentOrderMapper.selectBySemesterAndStudent(semesterId, studentId);
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = AppTime.now();
         if (order == null) {
             order = new StudentOrder();
             order.setSemesterId(semesterId);
@@ -247,8 +249,10 @@ public class StudentOrderService {
                         .in(Semester::getId, semesterIds).eq(Semester::getDeleted, 0))
                 .stream().collect(Collectors.toMap(Semester::getId, Semester::getName, (a, b) -> a));
         List<Long> orderIds = orders.stream().map(StudentOrder::getId).toList();
+        Map<Long, Integer> counts = new java.util.HashMap<>();
         Map<Long, Integer> totals = new java.util.HashMap<>();
         for (StudentOrderItem item : studentOrderItemMapper.selectByOrderIds(orderIds)) {
+            counts.merge(item.getOrderId(), 1, Integer::sum);
             totals.merge(item.getOrderId(), item.getQuantity() == null ? 0 : item.getQuantity(), Integer::sum);
         }
         return orders.stream().map(order -> {
@@ -262,6 +266,7 @@ public class StudentOrderService {
             item.setStatus(order.getStatus());
             item.setSubmittedAt(order.getSubmittedAt());
             item.setSubmitSnapshot(order.getSubmitSnapshot());
+            item.setItemCount(counts.getOrDefault(order.getId(), 0));
             item.setTotalQuantity(totals.getOrDefault(order.getId(), 0));
             // 归属取提交时快照（异动不影响历史归属，W15）
             Map<String, Object> snapshot = order.getSubmitSnapshot();
@@ -281,8 +286,9 @@ public class StudentOrderService {
     @Transactional(readOnly = true)
     public PageResponse<StudentOrderListItem> allPage(Long semesterId, Long collegeId, Long classId,
                                                       String studentName, long page, long size) {
-        long normalizedPage = Math.max(page, 1);
-        long normalizedSize = Math.min(Math.max(size, 1), 200);
+        studentName = SqlLike.escape(studentName);
+        long normalizedPage = PageResponse.normalizePage(page);
+        long normalizedSize = PageResponse.normalizeSize(size);
         long offset = (normalizedPage - 1) * normalizedSize;
         List<StudentOrderListItem> list = studentOrderMapper.selectAllPage(
                 semesterId, collegeId, classId, studentName, offset, normalizedSize);

@@ -7,12 +7,18 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -66,6 +72,61 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Void>> handleNotReadable(HttpMessageNotReadableException ex) {
         return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
+    }
+
+    /**
+     * 路径/查询参数类型不匹配（如 {@code ?page=abc}）→ 400。
+     *
+     * <p>本 advice 的处理器优先级高于 Spring 默认的 DefaultHandlerExceptionResolver，
+     * 缺少这几类处理器时它们会被 {@link #handleGeneric} 兜底成 500 SERVER_ERROR，
+     * 前端无法区分「客户端参数错」与「服务端故障」。</p>
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<List<String>>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String detail = ex.getName() + ": 参数类型不正确";
+        return ResponseEntity.badRequest()
+                .body(new ApiResponse<>(ErrorCode.PARAM_INVALID.code, "请求参数有误", List.of(detail)));
+    }
+
+    /**
+     * 请求方法不被支持 → 405（而非 500）。
+     *
+     * <p>按 HTTP 规范回填 {@code Allow} 头，告知客户端该资源支持的方法
+     * （Spring 默认的 DefaultHandlerExceptionResolver 会带，但本 advice 优先级更高，
+     * 不显式设置就会丢掉）。</p>
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(ErrorCode.METHOD_NOT_ALLOWED.httpStatus);
+        if (ex.getSupportedHttpMethods() != null && !ex.getSupportedHttpMethods().isEmpty()) {
+            builder.allow(ex.getSupportedHttpMethods().toArray(new org.springframework.http.HttpMethod[0]));
+        }
+        return builder.body(ApiResponse.fail(ErrorCode.METHOD_NOT_ALLOWED));
+    }
+
+    /** Content-Type 不被支持 → 415（而非 500）。 */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException ex) {
+        return ResponseEntity.status(ErrorCode.MEDIA_TYPE_NOT_SUPPORTED.httpStatus)
+                .body(ApiResponse.fail(ErrorCode.MEDIA_TYPE_NOT_SUPPORTED));
+    }
+
+    /** 缺少必需请求头 → 400。 */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingHeader(MissingRequestHeaderException ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
+    }
+
+    /** 不支持的 HTTP 方法/媒体类型之外的 Servlet 请求错误 → 400。 */
+    @ExceptionHandler(ServletRequestBindingException.class)
+    public ResponseEntity<ApiResponse<Void>> handleServletRequestBinding(ServletRequestBindingException ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
+    }
+
+    /** 静态资源/未知路径的 404（NoResourceFoundException 等）。 */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(NoResourceFoundException ex) {
+        return ResponseEntity.status(ErrorCode.NOT_FOUND.httpStatus).body(ApiResponse.fail(ErrorCode.NOT_FOUND));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

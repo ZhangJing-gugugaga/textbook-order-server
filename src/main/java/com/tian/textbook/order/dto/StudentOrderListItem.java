@@ -39,5 +39,9 @@ public class StudentOrderListItem {
     /** 提交时归属快照 */
     private Map<String, Object> submitSnapshot;
 
+    /** 明细行数（教材种类数） */
+    private Integer itemCount;
+
+    /** 数量合计（教材本数） */
     private Integer totalQuantity;
 }

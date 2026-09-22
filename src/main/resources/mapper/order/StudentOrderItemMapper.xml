@@ -13,4 +13,12 @@
         WHERE i.deleted = 0 AND o.semester_id = #{semesterId}
         ORDER BY i.textbook_id
     </select>
+
+    <!-- 与 selectSummaryRows 同口径的 COUNT（导出阈值判定用，避免为比较一次阈值物化全量结果） -->
+    <select id="countSummaryRows" resultType="long">
+        SELECT COUNT(1)
+        FROM student_order_item i
+        JOIN student_order o ON o.id = i.order_id AND o.deleted = 0 AND o.status = 'submitted'
+        WHERE i.deleted = 0 AND o.semester_id = #{semesterId}
+    </select>
 </mapper>

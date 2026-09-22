@@ -6,6 +6,7 @@ import com.tian.textbook.order.dto.OrderFormDetailVO;
 import com.tian.textbook.order.dto.OrderFormListItem;
 import com.tian.textbook.order.dto.OrderFormSubmitRequest;
 import com.tian.textbook.order.dto.TeacherCourseGroupVO;
+import com.tian.textbook.order.dto.TeacherTextbookOptionVO;
 import com.tian.textbook.order.service.TeacherOrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -58,5 +60,13 @@ public class TeacherOrderController {
     @PreAuthorize("hasAuthority('order:form:view:self')")
     public ApiResponse<List<OrderFormListItem>> history() {
         return ApiResponse.ok(teacherOrderService.myHistory());
+    }
+
+    /** 填报选书器：在库教材检索（title/isbn/author/press 模糊匹配；只读、最小权限） */
+    @GetMapping("/textbook")
+    @PreAuthorize("hasAuthority('order:form:submit')")
+    public ApiResponse<List<TeacherTextbookOptionVO>> textbooks(
+            @RequestParam(required = false) String keyword) {
+        return ApiResponse.ok(teacherOrderService.searchTextbooks(keyword));
     }
 }

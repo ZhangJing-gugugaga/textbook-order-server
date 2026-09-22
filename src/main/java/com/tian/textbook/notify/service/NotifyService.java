@@ -1,5 +1,6 @@
 package com.tian.textbook.notify.service;
 
+import com.tian.textbook.common.util.AppTime;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.tian.textbook.auth.WxMaClient;
 import com.tian.textbook.common.CurrentUser;
@@ -11,6 +12,7 @@ import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.notify.WindowChangeNotifier;
 import com.tian.textbook.common.semester.SemesterContextHolder;
 import com.tian.textbook.common.util.MapKeys;
+import com.tian.textbook.notify.dto.MyNoticeItem;
 import com.tian.textbook.notify.dto.NoticeConfirmRequest;
 import com.tian.textbook.notify.dto.NoticeFailureItem;
 import com.tian.textbook.notify.dto.NoticeProgressResponse;
@@ -110,6 +112,10 @@ public class NotifyService implements WindowChangeNotifier {
      * 当前用户未确认的 active 任务（阻塞弹窗数据源，按 created_at DESC）。
      *
      * <p>含已达 round_limit 停止订阅重发但未确认的任务（Q7 仍返回）。</p>
+     *
+     * <p>按 {@code target_roles} 过滤：任务只对目标角色可见（ADMIN 全量）。
+     * 此前不过滤时 target_roles 是死字段，供货商账号也能读到内部通知正文并确认，
+     * 「供货商物理隔离」边界被打破。</p>
      */
     @Transactional(readOnly = true)
     public List<UnconfirmedNoticeItem> listUnconfirmed() {
@@ -118,7 +124,9 @@ public class NotifyService implements WindowChangeNotifier {
         if (semesterId == null) {
             return List.of();
         }
-        List<NoticeTask> tasks = noticeTaskMapper.selectActiveBySemester(semesterId);
+        List<NoticeTask> tasks = noticeTaskMapper.selectActiveBySemester(semesterId).stream()
+                .filter(task -> targetsUser(task, current))
+                .toList();
         if (tasks.isEmpty()) {
             return List.of();
         }
@@ -145,10 +153,51 @@ public class NotifyService implements WindowChangeNotifier {
     }
 
     /**
+     * 「我的通知」分页：当前 active 学期的全部通知任务（含已关闭、含已确认），
+     * created_at DESC（同刻按 id DESC 兜底），回显本人 confirmedAt。
+     *
+     * <p>与 {@link #listUnconfirmed()} 同口径（同样按 target_roles 过滤）；差异只在
+     * 「含全部状态 + 含已确认」。单学期任务数量有界（同学期同时最多 1 个 active 任务，
+     * 关闭后累积），故全量取出后内存分页。</p>
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<MyNoticeItem> myNotices(long page, long size) {
+        CurrentUser current = SecurityUtils.requireCurrentUser();
+        long safePage = PageResponse.normalizePage(page);
+        long safeSize = PageResponse.normalizeSize(size);
+        Long semesterId = SemesterContextHolder.get();
+        if (semesterId == null) {
+            return PageResponse.of(List.of(), safePage, safeSize, 0);
+        }
+        List<NoticeTask> tasks = noticeTaskMapper.selectBySemester(semesterId).stream()
+                .filter(task -> targetsUser(task, current))
+                .toList();
+        if (tasks.isEmpty()) {
+            return PageResponse.of(List.of(), safePage, safeSize, 0);
+        }
+        Map<Long, LocalDateTime> confirmedAt = noticeRecordMapper.selectConfirmedByUserAndTasks(
+                        current.userId(), tasks.stream().map(NoticeTask::getId).toList())
+                .stream()
+                .collect(Collectors.toMap(NoticeRecord::getTaskId, NoticeRecord::getConfirmedAt,
+                        (first, second) -> first));
+        Comparator<NoticeTask> byRecency = Comparator
+                .comparing(NoticeTask::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(NoticeTask::getId);
+        List<MyNoticeItem> all = tasks.stream()
+                .sorted(byRecency.reversed())
+                .map(task -> toMyNoticeItem(task, confirmedAt.get(task.getId())))
+                .toList();
+        int from = (int) Math.min((safePage - 1) * safeSize, all.size());
+        int to = (int) Math.min(from + safeSize, all.size());
+        return PageResponse.of(all.subList(from, to), safePage, safeSize, all.size());
+    }
+
+    /**
      * 确认通知（幂等，SPEC §12）：首次写 confirmed_at，重复调用仍成功。
      *
-     * <p>任务不存在/不归属当前 active 学期 → 404；任务已关闭 → 409。
-     * subscribeResult（accepted/rejected）为订阅授权上报，openid 由 wx.login
+     * <p>任务不存在 / 不归属当前 active 学期 / 不在 target_roles 范围内 → 404；
+     * 任务已关闭 → 409。target_roles 校验与列表口径一致，避免绕过列表直接确认他人通知。</p>
+     * <p>subscribeResult（accepted/rejected）为订阅授权上报，openid 由 wx.login
      * code2session 静默收集（03 §3.3），本接口仅记录信号不落库该字段。</p>
      */
     @Transactional
@@ -158,15 +207,48 @@ public class NotifyService implements WindowChangeNotifier {
         if (semesterId != null && !semesterId.equals(task.getSemesterId())) {
             throw new BizException(ErrorCode.NOT_FOUND, "通知任务不存在");
         }
+        CurrentUser current = SecurityUtils.requireCurrentUser();
+        if (!targetsUser(task, current)) {
+            throw new BizException(ErrorCode.NOT_FOUND, "通知任务不存在");
+        }
         if (!STATUS_ACTIVE.equals(task.getStatus())) {
             throw new BizException(ErrorCode.STATE_CONFLICT, "通知任务已关闭，无需确认");
         }
-        CurrentUser current = SecurityUtils.requireCurrentUser();
-        // 幂等：无确认记录才插入；唯一键 uk_notice_round 兜底，重复调用仍 204
-        noticeRecordMapper.insertConfirmIfAbsent(taskId, current.userId());
+        // 幂等：无确认记录才插入；唯一键 uk_notice_confirm 兜底，重复调用仍成功。
+        // 并发场景下两个请求可能都通过 NOT EXISTS 判断，此时由 DB 唯一约束裁决：
+        // 后到者拿到 DuplicateKeyException，语义上等价于「已确认」，按成功返回（SPEC §12）。
+        try {
+            noticeRecordMapper.insertConfirmIfAbsent(taskId, current.userId());
+        } catch (DuplicateKeyException e) {
+            log.debug("并发确认已由唯一键兜底，视为成功: task={}, user={}", taskId, current.userId());
+        }
         if (request != null && request.subscribeResult() != null && log.isInfoEnabled()) {
             log.info("订阅授权上报: task={}, user={}, result={}", taskId, current.userId(), request.subscribeResult());
         }
+    }
+
+    /**
+     * 任务是否面向当前用户：ADMIN 全量可见；其余按 {@code target_roles}（逗号分隔角色码）
+     * 与用户角色集合求交。target_roles 为空视为不面向任何人（避免配置缺失时默认全放开）。
+     */
+    private boolean targetsUser(NoticeTask task, CurrentUser user) {
+        if (user == null) {
+            return false;
+        }
+        if (user.isAdmin()) {
+            return true;
+        }
+        String targetRoles = task.getTargetRoles();
+        if (targetRoles == null || targetRoles.isBlank() || user.roles() == null) {
+            return false;
+        }
+        for (String roleCode : targetRoles.split(",")) {
+            String code = roleCode.trim();
+            if (!code.isEmpty() && user.roles().contains(code)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ============ 管理侧：任务列表/创建/关闭/进度/失败名单 ============
@@ -183,6 +265,10 @@ public class NotifyService implements WindowChangeNotifier {
     /**
      * 手动创建（同学期仅 1 个 active，W18）：已有 active 任务 → 409 NOTICE_TASK_EXISTS。
      * round_limit/interval_hours 从 system_config 快照（W8）。
+     *
+     * <p>并发兜底由 DB 唯一约束 {@code uk_task_active (semester_id, active_flag, deleted)} 承担
+     * （active_flag 为生成列，仅 active 行为 1）。此前的「先查后插」在并发创建或窗口变更
+     * 并发触发下会产生 2 个 active 任务，而 catch 分支因表上缺少唯一约束从未被触发（死代码）。</p>
      */
     @Transactional
     public NoticeTaskListItem createTask(NoticeTaskCreateRequest request) {
@@ -205,7 +291,7 @@ public class NotifyService implements WindowChangeNotifier {
         try {
             noticeTaskMapper.insert(task);
         } catch (DataIntegrityViolationException e) {
-            // 并发创建兜底：同学期不允许第二个 active 手动任务
+            // 并发创建兜底：uk_task_active 命中（同学期不允许第二个 active 任务）
             throw new BizException(ErrorCode.NOTICE_TASK_EXISTS);
         }
         auditService.record(AuditService.NOTICE, "notice_task", String.valueOf(task.getId()),
@@ -227,7 +313,7 @@ public class NotifyService implements WindowChangeNotifier {
         update.setId(task.getId());
         update.setStatus(STATUS_CLOSED);
         update.setClosedBy(current.userId());
-        update.setClosedAt(LocalDateTime.now());
+        update.setClosedAt(AppTime.now());
         int rows = noticeTaskMapper.update(update, Wrappers.<NoticeTask>lambdaUpdate()
                 .eq(NoticeTask::getId, task.getId())
                 .eq(NoticeTask::getStatus, STATUS_ACTIVE));
@@ -265,16 +351,17 @@ public class NotifyService implements WindowChangeNotifier {
     @Transactional(readOnly = true)
     public PageResponse<NoticeFailureItem> taskFailures(Long id, long page, long size) {
         NoticeTask task = requireTask(id);
-        long safeSize = Math.min(Math.max(size, 1), 200);
-        long safePage = Math.max(page, 1);
+        long safeSize = PageResponse.normalizeSize(size);
+        long safePage = PageResponse.normalizePage(page);
         long offset = (safePage - 1) * safeSize;
-        // 学院/班级归属按任务所属学期关联（任务恒为 active 学期创建，两者一致）
-        Long semesterId = SemesterContextHolder.get() != null ? SemesterContextHolder.get() : task.getSemesterId();
+        // 学院/班级归属一律按任务所属学期关联：此前取「请求上下文学期」优先，
+        // 查历史任务时会用当前 active 学期的 profile 去关联历史学期的人，
+        // 名单里的学院/班级会错配（甚至全为 null）。
         List<NoticeFailureItem> items = noticeRecordMapper
-                .selectFailures(task.getId(), semesterId, offset, safeSize).stream()
+                .selectFailures(task.getId(), task.getSemesterId(), offset, safeSize).stream()
                 .map(this::toFailureItem)
                 .toList();
-        long total = noticeRecordMapper.countFailures(task.getId(), semesterId);
+        long total = noticeRecordMapper.countFailures(task.getId(), task.getSemesterId());
         return PageResponse.of(items, safePage, safeSize, total);
     }
 
@@ -334,8 +421,12 @@ public class NotifyService implements WindowChangeNotifier {
      * <p>目标用户 = target_roles 角色且在 active 学期有 user_semester_profile 的用户
      * （status=1），排除已确认；仅 STUDENT 且 openid 非空才发订阅消息，每次尝试写
      * notice_record(round_no, sent_at, send_status)；教师/秘书不写发送记录（弹窗为主触达，Q8）。</p>
+     *
+     * <p><b>不在事务内做远程调用</b>：本方法此前标注 {@code @Transactional} 并在循环里直接调用
+     * 微信订阅消息接口，数千学生时单事务持有数据库连接串行阻塞，HTTP 挂起即事务挂起、
+     * 连接池耗尽。现改为「事务内只读快照 + 事务外逐条发送与落库」：目标解析在一个只读事务里
+     * 完成，随后每条记录独立提交，单条失败不影响其余。</p>
      */
-    @Transactional
     public void resendTask(NoticeTask task) {
         int roundLimit = configService.getInt(ConfigService.NOTICE_ROUND_LIMIT, DEFAULT_ROUND_LIMIT);
         Integer maxRound = noticeRecordMapper.selectMaxRoundNo(task.getId());
@@ -344,13 +435,39 @@ public class NotifyService implements WindowChangeNotifier {
             log.info("通知任务已达重发轮次上限，停止订阅消息重发: task={}, roundLimit={}", task.getId(), roundLimit);
             return;
         }
+        // 只读快照（一个短事务内取完，不跨远程调用）
+        ResendTargets snapshot = loadResendTargets(task, roundNo);
+        int sent = 0;
+        int unauthorized = 0;
+        int failed = 0;
+        int skipped = snapshot.skipped();
+        for (SysUser user : snapshot.pending()) {
+            String status = sendSubscribe(task, user);
+            switch (status) {
+                case "sent" -> sent++;
+                case "unauthorized" -> unauthorized++;
+                case "failed" -> failed++;
+                default -> {
+                }
+            }
+            // 逐条独立事务落库：单条插入失败（含唯一键冲突）不牵连其余用户
+            insertRoundRecord(task.getId(), user.getId(), roundNo, status);
+        }
+        log.info("通知重发一轮: task={}, round={}, 目标={}, sent={}, unauthorized={}, failed={}, 跳过={}",
+                task.getId(), roundNo, snapshot.total(), sent, unauthorized, failed, skipped);
+    }
+
+    /** 一轮重发的只读快照：待发送用户 + 已跳过计数 + 目标总数。 */
+    private record ResendTargets(List<SysUser> pending, int skipped, int total) {
+    }
+
+    /** 组装本轮待发送清单（只读；每条查询各自独立，不跨远程调用持有连接）。 */
+    private ResendTargets loadResendTargets(NoticeTask task, int roundNo) {
         // 仅 STUDENT 写订阅消息发送记录；教师/秘书以弹窗为主触达，不写 notice_record（Q8）
         Set<Long> studentIds = userIdsOfRole("STUDENT");
         Set<Long> confirmed = confirmedUserIds(task.getId());
         List<SysUser> targets = resolveTargetUsers(task);
-        int sent = 0;
-        int unauthorized = 0;
-        int failed = 0;
+        List<SysUser> pending = new ArrayList<>();
         int skipped = 0;
         for (SysUser user : targets) {
             if (confirmed.contains(user.getId()) || !studentIds.contains(user.getId())) {
@@ -362,18 +479,9 @@ public class NotifyService implements WindowChangeNotifier {
                 skipped++;
                 continue;
             }
-            String status = sendSubscribe(task, user);
-            switch (status) {
-                case "sent" -> sent++;
-                case "unauthorized" -> unauthorized++;
-                case "failed" -> failed++;
-                default -> {
-                }
-            }
-            insertRoundRecord(task.getId(), user.getId(), roundNo, status);
+            pending.add(user);
         }
-        log.info("通知重发一轮: task={}, round={}, 目标={}, sent={}, unauthorized={}, failed={}, 跳过={}",
-                task.getId(), roundNo, targets.size(), sent, unauthorized, failed, skipped);
+        return new ResendTargets(pending, skipped, targets.size());
     }
 
     /**
@@ -390,7 +498,7 @@ public class NotifyService implements WindowChangeNotifier {
         }
         Map<String, String> data = new LinkedHashMap<>();
         data.put("thing1", truncate(task.getTitle(), 20));
-        data.put("time2", LocalDateTime.now().format(WX_TIME_FMT));
+        data.put("time2", AppTime.now().format(WX_TIME_FMT));
         data.put("thing3", truncate(task.getContent(), 20));
         boolean ok = wxMaClient.sendSubscribeMessage(openid, templateId, NOTICE_PAGE, data);
         return ok ? "sent" : "failed";
@@ -402,7 +510,7 @@ public class NotifyService implements WindowChangeNotifier {
             record.setTaskId(taskId);
             record.setUserId(userId);
             record.setRoundNo(roundNo);
-            record.setSentAt(LocalDateTime.now());
+            record.setSentAt(AppTime.now());
             record.setSendStatus(status);
             record.setDeleted(0L);
             noticeRecordMapper.insert(record);
@@ -440,7 +548,10 @@ public class NotifyService implements WindowChangeNotifier {
     }
 
     /**
-     * 目标任务用户：target_roles 角色 ∩ active 学期在册（user_semester_profile.status=1）∩ 账号正常。
+     * 目标任务用户：target_roles 角色 ∩ 任务所属学期在册（user_semester_profile.status=1）∩ 账号正常。
+     *
+     * <p>学期取 {@code task.getSemesterId()} 而非请求上下文：定时重发与历史任务回看都没有
+     * 请求上下文，取上下文会得到错误的在册名单。</p>
      */
     @Transactional(readOnly = true)
     public List<SysUser> resolveTargetUsers(NoticeTask task) {
@@ -457,7 +568,7 @@ public class NotifyService implements WindowChangeNotifier {
         Set<Long> roleUserIds = userRoles.stream()
                 .map(SysUserRole::getUserId)
                 .collect(Collectors.toSet());
-        Long semesterId = SemesterContextHolder.get();
+        Long semesterId = task.getSemesterId();
         if (semesterId == null) {
             return List.of();
         }
@@ -555,6 +666,18 @@ public class NotifyService implements WindowChangeNotifier {
         return semesterId;
     }
 
+    private MyNoticeItem toMyNoticeItem(NoticeTask task, LocalDateTime confirmedAt) {
+        MyNoticeItem item = new MyNoticeItem();
+        item.setTaskId(task.getId());
+        item.setTitle(task.getTitle());
+        item.setContent(task.getContent());
+        item.setSource(task.getSource());
+        item.setStatus(task.getStatus());
+        item.setCreatedAt(task.getCreatedAt());
+        item.setConfirmedAt(confirmedAt);
+        return item;
+    }
+
     private NoticeTaskListItem toListItem(NoticeTask task) {
         NoticeTaskListItem item = new NoticeTaskListItem();
         item.setId(task.getId());
@@ -588,13 +711,22 @@ public class NotifyService implements WindowChangeNotifier {
         return item;
     }
 
-    /** VARCHAR 上限保护（notice_task.title=120 / content=500，合并追加不越界） */
+    /**
+     * VARCHAR 上限保护（notice_task.title=120 / content=500，合并追加不越界）。
+     *
+     * <p>统一取<b>头部</b>并追加省略号：此前本模块取尾部（{@code substring(len - max)}），
+     * 异动模块取头部，同一系统里两处截断语义相反——同一段文本经不同入口落库后内容不一致，
+     * 排查时极易误判。截断是异常路径（正常内容不会超限），保留开头更利于识别。</p>
+     */
     private static String truncate(String value, int max) {
         if (value == null) {
             return null;
         }
         String trimmed = value.strip();
-        return trimmed.length() <= max ? trimmed : trimmed.substring(trimmed.length() - max);
+        if (trimmed.length() <= max) {
+            return trimmed;
+        }
+        return trimmed.substring(0, Math.max(0, max - 1)) + "…";
     }
 
     private static long toLong(Object value) {

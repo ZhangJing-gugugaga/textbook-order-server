@@ -20,6 +20,9 @@
         LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
         WHERE f.status = 'reviewed' AND f.semester_id = #{semesterId} AND f.deleted = 0
         ORDER BY c.id, u.name, t.isbn
+        <!-- 行数上限：清单是「一学院一 sheet」的导出源，全量入内存无上限时
+             大校（数十万明细）单次请求即内存尖峰；超限请用导出中心（异步 + 流式） -->
+        LIMIT #{limit}
     </select>
 
     <select id="countReviewed" resultType="long">

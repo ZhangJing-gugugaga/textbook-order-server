@@ -56,6 +56,9 @@ public class SecurityConfig {
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/error").permitAll()
+                        // 健康检查：仅 /actuator/health（存活/就绪探针），供 systemd/负载均衡探活。
+                        // 不放开 /actuator/**，避免 env/beans/heapdump 等信息端点被匿名读取。
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(mustChangePasswordFilter, JwtAuthFilter.class)

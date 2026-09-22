@@ -352,7 +352,7 @@ class WindowEngineIntegrationTest extends IntegrationTestBase {
         var scenario = scenarioFactory.seed("WM");
         semesterService.openWindow(scenario.semesterId());
 
-        List<AuditLog> changes = semesterService.windowChanges(scenario.semesterId(), 1, 20);
+        List<AuditLog> changes = semesterService.windowChanges(scenario.semesterId(), 1, 20).list();
 
         assertThat(changes).isNotEmpty();
         assertThat(changes).allSatisfy(log -> {

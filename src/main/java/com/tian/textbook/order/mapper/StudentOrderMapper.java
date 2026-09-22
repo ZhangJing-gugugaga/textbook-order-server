@@ -25,6 +25,7 @@ public interface StudentOrderMapper extends BaseMapper<StudentOrder> {
     StudentOrder selectByIdSoft(@Param("id") Long id);
 
     /** 学生本人历史选购记录（数据隔离：student_id = 本人） */
+    @ResultMap(RESULT_MAP)
     @CollegeScope(studentColumn = "student_id")
     @Select("SELECT * FROM student_order WHERE student_id = #{studentId} AND deleted = 0 ORDER BY id DESC")
     List<StudentOrder> selectStudentOrders(@Param("studentId") Long studentId);

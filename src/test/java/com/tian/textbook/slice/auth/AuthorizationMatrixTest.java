@@ -80,6 +80,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         TeacherOrderController.class, UserController.class, SupplierController.class,
         DashboardController.class, SemesterWindowController.class,
         AdminNoticeController.class, NoticeController.class, MeController.class,
+        com.tian.textbook.approval.controller.ChangeRequestController.class,
         com.tian.textbook.auth.AuthController.class})
 @ContextConfiguration(classes = TextbookOrderServerApplication.class)
 @Import({SecurityConfig.class, AuthorizationMatrixTest.SliceTestConfig.class})
@@ -102,6 +103,8 @@ class AuthorizationMatrixTest {
     private SemesterActiveService activeSemesterService;
     @MockBean
     private NotifyService notifyService;
+    @MockBean
+    private com.tian.textbook.approval.service.ChangeRequestService changeRequestService;
     @MockBean
     private AuthService authService;
     @MockBean
@@ -452,6 +455,98 @@ class AuthorizationMatrixTest {
 
         mockMvc.perform(get("/api/notice/unconfirmed")
                         .header("Authorization", bearer(token(51L, "STUDENT"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FIRST_LOGIN_REQUIRED"));
+    }
+
+    @Test
+    @DisplayName("首登待改密用户访问 /api/auth/switch-role → 403（不再被 /api/auth/ 前缀通配放行）")
+    void switchRole_withFirstLoginPending_returns403FirstLoginRequired() throws Exception {
+        givenUser(52L, "TEACHER", true, false, 1, 1);
+
+        mockMvc.perform(post("/api/auth/switch-role")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"roleCode\":\"TEACHER\"}")
+                        .header("Authorization", bearer(token(52L, "TEACHER"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FIRST_LOGIN_REQUIRED"));
+    }
+
+    @Test
+    @DisplayName("首登待改密用户访问 /api/auth/logout → 放行（显式白名单内）")
+    void logout_withFirstLoginPending_isAllowed() throws Exception {
+        givenUser(53L, "STUDENT", true, false, 1, 1);
+
+        // 放行即不再返回 FIRST_LOGIN_REQUIRED（后续处理结果不在本用例断言范围）
+        mockMvc.perform(post("/api/auth/logout")
+                        .header("Authorization", bearer(token(53L, "STUDENT"))))
+                .andExpect(jsonPath("$.code").value(org.hamcrest.Matchers.not("FIRST_LOGIN_REQUIRED")));
+    }
+
+    // ============ 联调新增端点（V1.0.1–V1.0.3）的越权矩阵 ============
+
+    @Test
+    @DisplayName("STUDENT 访问教师选书器 /api/teacher/textbook → 403 FORBIDDEN")
+    void teacherTextbook_asStudent_returns403Forbidden() throws Exception {
+        givenUser(70L, "STUDENT", false, true, 1, 1);
+
+        mockMvc.perform(get("/api/teacher/textbook")
+                        .header("Authorization", bearer(token(70L, "STUDENT"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    @DisplayName("TEACHER 访问教师选书器 /api/teacher/textbook?keyword= → 200")
+    void teacherTextbook_asTeacher_returns200() throws Exception {
+        givenUser(20L, "TEACHER", false, true, 1, 1);
+
+        mockMvc.perform(get("/api/teacher/textbook").param("keyword", "数学")
+                        .header("Authorization", bearer(token(20L, "TEACHER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("0"));
+    }
+
+    @Test
+    @DisplayName("STUDENT 访问异动归属选项 /api/change/org-options → 403 FORBIDDEN")
+    void orgOptions_asStudent_returns403Forbidden() throws Exception {
+        givenUser(71L, "STUDENT", false, true, 1, 1);
+
+        mockMvc.perform(get("/api/change/org-options")
+                        .header("Authorization", bearer(token(71L, "STUDENT"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    @DisplayName("SECRETARY 访问异动归属选项 /api/change/org-options → 200")
+    void orgOptions_asSecretary_returns200() throws Exception {
+        givenUser(30L, "SECRETARY", false, true, 1, 1);
+
+        mockMvc.perform(get("/api/change/org-options")
+                        .header("Authorization", bearer(token(30L, "SECRETARY"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("0"));
+    }
+
+    @Test
+    @DisplayName("STUDENT 访问 /api/notice/mine → 200（仅需登录，无权限码）")
+    void noticeMine_asStudent_returns200() throws Exception {
+        givenUser(10L, "STUDENT", false, true, 1, 1);
+
+        mockMvc.perform(get("/api/notice/mine")
+                        .header("Authorization", bearer(token(10L, "STUDENT"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("0"));
+    }
+
+    @Test
+    @DisplayName("首登待改密用户访问 /api/notice/mine → 403 FIRST_LOGIN_REQUIRED")
+    void noticeMine_withFirstLoginNotVerified_returns403FirstLoginRequired() throws Exception {
+        givenUser(52L, "STUDENT", false, false, 1, 1);
+
+        mockMvc.perform(get("/api/notice/mine")
+                        .header("Authorization", bearer(token(52L, "STUDENT"))))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("FIRST_LOGIN_REQUIRED"));
     }

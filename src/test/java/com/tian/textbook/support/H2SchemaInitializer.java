@@ -29,17 +29,27 @@ public final class H2SchemaInitializer {
 
     private static final Pattern COLUMN_COMMENT = Pattern.compile("\\s+COMMENT\\s+'[^']*'");
     private static final Pattern TABLE_COMMENT = Pattern.compile("\\s*COMMENT\\s*=\\s*'[^']*'");
-    private static final Pattern TABLE_ENGINE = Pattern.compile("\\s*ENGINE=\\w+(\\s+DEFAULT\\s+CHARSET=\\w+)?");
+    private static final Pattern TABLE_ENGINE = Pattern.compile(
+            "\\s*ENGINE=\\w+(\\s+DEFAULT\\s+CHARSET=\\w+)?(\\s+COLLATE=\\w+)?");
     private static final Pattern JSON_TYPE = Pattern.compile("\\bJSON\\b");
-    private static final Pattern ON_UPDATE = Pattern.compile("\\s+ON\\s+UPDATE\\s+CURRENT_TIMESTAMP", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ON_UPDATE = Pattern.compile(
+            "\\s+ON\\s+UPDATE\\s+CURRENT_TIMESTAMP\\(3\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern UNIQUE_KEY = Pattern.compile("UNIQUE\\s+KEY\\s+(\\w+)\\s*\\(", Pattern.CASE_INSENSITIVE);
     /** 普通二级索引（H2 不支持表内联 KEY 索引；前视断言避免误伤 config_key 等列名） */
     private static final Pattern PLAIN_KEY = Pattern.compile(
             ",?\\s*(?<![A-Za-z0-9_])KEY\\s+\\w+\\s*\\([^)]*\\)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern CREATE_TABLE = Pattern.compile("CREATE\\s+TABLE\\s+", Pattern.CASE_INSENSITIVE);
+    /** 补 IF NOT EXISTS（schema.sql 已自带时不再重复添加，否则生成 "IF NOT EXISTS IF NOT EXISTS"） */
+    private static final Pattern CREATE_TABLE = Pattern.compile(
+            "CREATE\\s+TABLE\\s+(?!IF\\s+NOT\\s+EXISTS\\s+)", Pattern.CASE_INSENSITIVE);
     /** H2 不支持 IF()：生成列表达式改写为 CASE WHEN */
     private static final Pattern GENERATED_IF = Pattern.compile(
             "IF\\(active_status='active',1,NULL\\)", Pattern.CASE_INSENSITIVE);
+    /** 同上：通知任务的 active 生成列（status 列名与 semester 不同，需独立改写） */
+    private static final Pattern GENERATED_IF_TASK = Pattern.compile(
+            "IF\\(status='active',1,NULL\\)", Pattern.CASE_INSENSITIVE);
+    /** 同上：通知确认记录唯一性生成列 */
+    private static final Pattern GENERATED_IF_CONFIRM = Pattern.compile(
+            "IF\\(confirmed_at IS NOT NULL AND deleted = 0\\s*,\\s*1\\s*,\\s*NULL\\)", Pattern.CASE_INSENSITIVE);
     /** H2 生成列不支持 STORED 关键字 */
     private static final Pattern GENERATED_STORED = Pattern.compile("\\)\\s*STORED", Pattern.CASE_INSENSITIVE);
 
@@ -95,6 +105,9 @@ public final class H2SchemaInitializer {
         ddl = UNIQUE_KEY.matcher(ddl).replaceAll("CONSTRAINT $1 UNIQUE (");
         ddl = PLAIN_KEY.matcher(ddl).replaceAll("");
         ddl = GENERATED_IF.matcher(ddl).replaceAll("CASE WHEN active_status='active' THEN 1 ELSE NULL END");
+        ddl = GENERATED_IF_TASK.matcher(ddl).replaceAll("CASE WHEN status='active' THEN 1 ELSE NULL END");
+        ddl = GENERATED_IF_CONFIRM.matcher(ddl).replaceAll(
+                "CASE WHEN confirmed_at IS NOT NULL AND deleted = 0 THEN 1 ELSE NULL END");
         ddl = GENERATED_STORED.matcher(ddl).replaceAll(")");
         ddl = CREATE_TABLE.matcher(ddl).replaceAll("CREATE TABLE IF NOT EXISTS ");
         return ddl;

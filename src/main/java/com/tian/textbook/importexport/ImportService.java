@@ -26,6 +26,18 @@ public interface ImportService {
     /** 批次进度（total/ok/error/progress_pct/status） */
     ImportBatch getBatch(Long batchId);
 
+    /**
+     * 批次进度（归属校验）：非 ADMIN 只能读自己发起的批次，否则按 404 处理。
+     * 对外端点一律用本方法，{@link #getBatch} 仅供内部与测试使用。
+     */
+    ImportBatch getBatchForUser(Long batchId);
+
     /** 错误明细文件路径（无错误返回 null） */
     String errorFilePath(Long batchId);
+
+    /**
+     * 下载用错误明细文件路径：含归属校验，且区分「没有错误明细」与「明细已过期清理」。
+     * 对外端点用本方法。
+     */
+    String errorFilePathForDownload(Long batchId);
 }

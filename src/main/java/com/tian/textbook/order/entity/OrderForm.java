@@ -47,6 +47,15 @@ public class OrderForm {
     /** 补正截止（关窗后 order.correct_window_days 天，W4） */
     private LocalDateTime correctDeadline;
 
+    /**
+     * 内容版本（每次教师提交/补正整单覆盖后 +1）。
+     *
+     * <p>审核的 CAS 谓词除 status 外还比对本列：只比对 status 无法发现
+     * 「管理员打开详情后教师又重提过」——状态仍是 pending_review，但明细已被整单覆盖，
+     * 审批结论会落在管理员没见过的内容上（审核对象漂移）。</p>
+     */
+    private Integer contentVersion;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

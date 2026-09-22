@@ -14,6 +14,13 @@ springdoc:
   swagger-ui:
     enabled: ${SPRINGDOC_ENABLED:false}
 
+textbook:
+  jwt:
+    # 无默认值：未注入 JWT_SECRET 时占位符解析失败，启动即中止（绝不回落到仓库内公开密钥）
+    secret: ${JWT_SECRET}
+  cors:
+    allowed-origins: ${TEXTBOOK_CORS_ORIGINS:}
+
 logging:
   level:
     com.tian.textbook: INFO

@@ -34,7 +34,15 @@ public class ExportTask {
     @JsonIgnore
     private String filePath;
 
-    /** 一次性下载 token（首次下载后置空） */
+    /**
+     * 一次性下载 token（首次下载后置空）。
+     *
+     * <p>刻意<b>保留</b>在 JSON 响应中（与 {@link #filePath} 不同）：异步导出的 token 是在任务
+     * 完成后才生成的，前端只能从轮询 `GET /api/export-task/{id}` 的响应里拿到它——
+     * 加 {@code @JsonIgnore} 会直接切断「轮询 → 下载」链路。
+     * 越权读取由接口层的归属校验兜住（{@code getTaskForUser} / {@code getSupplierTask}：
+     * 非 ADMIN 只能读本人创建的任务，失败统一 404，不通过状态码差异泄露任务存在性）。</p>
+     */
     private String downloadToken;
 
     private LocalDateTime tokenExpireAt;

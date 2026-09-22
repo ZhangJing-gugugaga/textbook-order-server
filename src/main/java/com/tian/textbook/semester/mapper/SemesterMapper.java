@@ -21,8 +21,14 @@ public interface SemesterMapper extends BaseMapper<Semester> {
             + "WHERE id = #{id} AND active_status = 'draft' AND version = #{version}")
     int activateIfDraft(@Param("id") Long id, @Param("version") int version);
 
-    /** 归档当前 active 学期（切换事务第二步） */
-    @Update("UPDATE semester SET active_status = 'archived', updated_at = NOW(3) "
-            + "WHERE id = #{id} AND active_status = 'active'")
+    /**
+     * 归档当前 active 学期（切换事务第二步）。
+     *
+     * <p>同时关闭窗口（{@code channel_open=0, window_status='closed'}）：归档只改 active_status 时，
+     * 窗口判定（{@code channel_open=1 && window_status='open'}）会继续放行，已归档学期仍可写入。
+     * 窗口状态是窗口判定的唯一真源，必须与归档同步收敛。</p>
+     */
+    @Update("UPDATE semester SET active_status = 'archived', channel_open = 0, window_status = 'closed', "
+            + "updated_at = NOW(3) WHERE id = #{id} AND active_status = 'active'")
     int archiveIfActive(@Param("id") Long id);
 }
