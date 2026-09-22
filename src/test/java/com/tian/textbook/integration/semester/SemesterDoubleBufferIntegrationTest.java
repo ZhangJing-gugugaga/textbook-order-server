@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +40,8 @@ class SemesterDoubleBufferIntegrationTest extends IntegrationTestBase {
     private SysUserMapper userMapper;
     @Autowired
     private TestDataSeeder seeder;
+    @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     @AfterEach
     void tearDown() {
@@ -50,6 +53,48 @@ class SemesterDoubleBufferIntegrationTest extends IntegrationTestBase {
         return semesterMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
                 .<Semester>lambdaQuery().eq(Semester::getActiveStatus, "active")
                 .eq(Semester::getDeleted, 0));
+    }
+
+    @Test
+    @DisplayName("编辑基本信息只写请求字段：不得把窗口状态/版本按旧快照回写（否则窗口被静默重开、学期掉回 draft）")
+    void updateBasic_doesNotOverwriteWindowStateFromStaleSnapshot() throws Exception {
+        Semester semester = seeder.semester("2025-2026-9", LocalDate.of(2025, 9, 1),
+                LocalDate.of(2026, 1, 15), null, null, 1, 1);
+        semesterMapper.activateIfDraft(semester.getId(), semester.getVersion());
+        semesterService.setWindow(semester.getId(), new com.tian.textbook.semester.dto.WindowSetRequest(
+                LocalDateTime.now().minusDays(1), LocalDateTime.now().plusDays(7), 1, 1));
+        semesterService.openWindow(semester.getId());
+        int versionBefore = semesterMapper.selectByIdSoft(semester.getId()).getVersion();
+
+        // 构造「读快照 → 他方提交」的交织：主线程持行锁改窗口状态与 version，编辑请求只能在
+        // 锁释放后落库。旧实现用 updateById 回写整实体（含 window_status/channel_open/version），
+        // 会把窗口重新打开、version 回退——真实场景即「管理员编辑学期信息期间窗口到点自动截止」
+        // 或「draft 学期被激活后又被写回 draft（系统无 active 学期，全站业务接口报错）」。
+        Thread editThread = new Thread(() -> semesterService.updateBasic(semester.getId(),
+                new com.tian.textbook.semester.dto.SemesterUpdateRequest(
+                        "改个名字", null, null, null, null, null, null)), "concurrent-edit");
+        new org.springframework.transaction.support.TransactionTemplate(transactionManager)
+                .executeWithoutResult(tx -> {
+                    semesterMapper.update(null, com.baomidou.mybatisplus.core.toolkit.Wrappers
+                            .<Semester>lambdaUpdate().eq(Semester::getId, semester.getId())
+                            .set(Semester::getWindowStatus, "closed")
+                            .set(Semester::getChannelOpen, 0)
+                            .set(Semester::getVersion, versionBefore + 5));
+                    editThread.start();
+                    try {
+                        Thread.sleep(250); // 让它到达 UPDATE 的锁等待；即便未到也只是读到新值，不会误判
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+        editThread.join(10_000);
+
+        Semester reloaded = semesterMapper.selectByIdSoft(semester.getId());
+        assertThat(reloaded.getName()).isEqualTo("改个名字");
+        assertThat(reloaded.getWindowStatus()).as("窗口状态不得按旧快照回写").isEqualTo("closed");
+        assertThat(reloaded.getChannelOpen()).isZero();
+        assertThat(reloaded.getVersion()).as("version 不得回退").isEqualTo(versionBefore + 5);
+        assertThat(reloaded.getActiveStatus()).isEqualTo("active");
     }
 
     @Test

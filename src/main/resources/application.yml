@@ -15,7 +15,7 @@ spring:
     default-property-inclusion: non_null
   # 数据源：连接串经环境变量注入（SPEC §13，不硬编码）
   datasource:
-    url: ${DB_URL:jdbc:mysql:<SECRET_824596b7>}
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/textbook_order?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -37,6 +37,12 @@ spring:
   # 优雅停机：停止接收新请求后，等待在途请求与异步任务收尾的宽限期
   lifecycle:
     timeout-per-shutdown-phase: 30s
+  task:
+    scheduling:
+      pool:
+        # 三个定时任务（窗口引擎每分钟 / 通知重发每日 09:30 / 导出清理每小时）默认共用 1 个线程：
+        # 通知重发是逐人远程调用（万人级可达分钟级），期间窗口扫描会排队，自动开关窗被顺延。
+        size: 3
 
 server:
   port: ${SERVER_PORT:8080}
@@ -90,8 +96,15 @@ springdoc:
 textbook:
   security:
     login:
-      max-fail: 5            # 登录失败 5 次锁定（W20）
+      max-fail: ${TEXTBOOK_SECURITY_LOGIN_MAX_FAIL:5}    # 登录失败 5 次锁定（W20）
       lock-minutes: 15       # 锁定 15 分钟
+      # 登录/首登校验限频（次/分钟）。联调与压测必须调大，否则很快撞 429（见 README 环境变量表）。
+      rate-per-minute: ${TEXTBOOK_SECURITY_LOGIN_RATE_PER_MINUTE:10}
+      # 可信反向代理白名单（逗号分隔 IP）：只有来自这些地址的 X-Forwarded-For 才被采信。
+      # 占位符必须在这里：属性全名是 textbook.security.login.trusted-proxies，而文档让运维设的
+      # TEXTBOOK_TRUSTED_PROXIES 按松散绑定会落到 textbook.trusted-proxies（不存在）——
+      # 结果是「照文档配了但不生效」，审计 IP 全记 127.0.0.1 且限频丢失 IP 维度。
+      trusted-proxies: ${TEXTBOOK_TRUSTED_PROXIES:}
   jwt:
     # 必填：无默认值（缺失即启动失败，见 StartupSelfCheck）。
     # 历史默认值 textbook-dev-only-insecure-secret-key-32b 是仓库公开字符串，

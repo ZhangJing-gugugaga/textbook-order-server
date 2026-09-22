@@ -251,6 +251,18 @@ public class ImportRowWriter {
         if (ctx.collegeIds().isEmpty() || ctx.semesterId() == null) {
             return new ScopeFinishResult(0, updated, shrinks);
         }
+        // 停用比对只在「目标学期 = active 学期」时执行。
+        //
+        // 候选集来自 sys_user.college_id（该列是 **active 学期**的归属冗余列），而停用是全局的
+        // （status=0 + role_version+1 + 撤销全部 refresh = 直接踢下线）。对 draft 学期做局部名单
+        // 导入时，比对基准与目标学期错位：文件里没有的、属于当前 active 学期的在册学生/教师会被
+        // 判为「不在名单」而全局停用——与 SPEC「新学期导入只写 draft 区与 profile，绝不污染
+        // active 学期归属」冲突。draft/历史学期的名单导入只落 profile，不动账号状态。
+        if (!ctx.writeUserAffiliation()) {
+            log.info("停用比对跳过：目标学期非 active 学期（semesterId={}，仅写 profile 不动作账号状态）",
+                    ctx.semesterId());
+            return new ScopeFinishResult(0, updated, shrinks);
+        }
         String roleCode = "student".equals(ctx.bizType()) ? "STUDENT" : "TEACHER";
         Long roleId = ctx.roleId(roleCode);
         if (roleId == null) {

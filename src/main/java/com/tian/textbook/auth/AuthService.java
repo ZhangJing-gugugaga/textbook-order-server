@@ -179,10 +179,34 @@ public class AuthService {
                         java.util.Map.of("verified", false, "failCount", failCount));
                 throw new BizException(ErrorCode.FIRST_LOGIN_VERIFY_FAILED);
             }
+            // 手机号后 4 位通过后，才把 wxCode 换来的 openid 绑定到账号（订阅消息推送用）。
+            // 绑定失败不阻断校验：主因子已通过，openid 只影响订阅消息通道（未绑定即如实记
+            // unauthorized，弹窗通道不受影响）。
+            if (request.wxCode() != null && !request.wxCode().isBlank()) {
+                openidToBind = wxMaClient.code2Openid(request.wxCode());
+                if (openidToBind == null) {
+                    log.warn("首登校验：wxCode 换取 openid 失败，跳过绑定（不影响校验结果）: userId={}", user.getId());
+                }
+            }
         } else if (request.wxCode() != null && !request.wxCode().isBlank()) {
-            openidToBind = wxMaClient.code2Openid(request.wxCode());
-            if (openidToBind == null) {
-                throw new BizException(ErrorCode.FIRST_LOGIN_VERIFY_FAILED, "微信绑定失败，请重试或改用手机号校验");
+            // 只凭 wxCode 时**只能校验已绑定的 openid，不能新建绑定**。
+            // 原实现把 wxCode 换来的 openid 直接写入并置 first_login_verified=1，与账号已有 openid
+            // 无任何比对——而初始口令 = 学号/工号后 6 位（学号可枚举），于是任何人
+            // 「初始口令登录 → 用自己的微信 wxCode 过首登 → 改密」即可接管未首登账号，
+            // 手机号后 4 位这一唯一补偿控制被整段跳过（也与 schema 注释「openid 仅推送用、
+            // 不作认证」相悖）。
+            String codeOpenid = wxMaClient.code2Openid(request.wxCode());
+            if (codeOpenid == null) {
+                throw new BizException(ErrorCode.FIRST_LOGIN_VERIFY_FAILED,
+                        "微信校验失败，请重试或改用手机号后 4 位校验");
+            }
+            if (user.getOpenid() == null || user.getOpenid().isBlank()
+                    || !user.getOpenid().equals(codeOpenid)) {
+                int failCount = loginAttemptGuard.recordFailure(user.getId());
+                auditService.record(AuditService.ACCOUNT, "first-login", String.valueOf(user.getId()),
+                        java.util.Map.of("verified", false, "failCount", failCount));
+                throw new BizException(ErrorCode.FIRST_LOGIN_VERIFY_FAILED,
+                        "该微信未绑定此账号，请改用手机号后 4 位校验或联系教材室");
             }
         } else {
             throw new BizException(ErrorCode.PARAM_INVALID, "请提供手机号后 4 位或微信授权 code");

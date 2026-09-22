@@ -124,7 +124,13 @@ public class UserService {
                 Map.of("op", status == 0 ? "disable" : "enable", "userNo", user.getUserNo()));
     }
 
-    /** 重置密码：重置为初始密码规则 + must_change_password=1，撤销 refresh 并踢下线 */
+    /**
+     * 重置密码：重置为初始密码规则 + must_change_password=1，撤销 refresh 并踢下线。
+     *
+     * <p>同时把 {@code first_login_verified} 清零：口令已回到「学号/工号后 6 位」（学号可枚举），
+     * 若保留已验证标记，改密闸门（mustChangePassword=1 且 firstLoginVerified≠1）不再成立——
+     * 任何知道学号的人登录后可直接改密接管账号，手机号后 4 位校验被整段跳过。</p>
+     */
     @Transactional
     public void resetPassword(Long id) {
         SysUser user = userMapper.selectByIdSoft(id);
@@ -135,6 +141,7 @@ public class UserService {
         update.setId(id);
         update.setPasswordHash(passwordEncoder.encode(initialPassword(user.getUserNo())));
         update.setMustChangePassword(1);
+        update.setFirstLoginVerified(0);
         userMapper.update(update, Wrappers.<SysUser>lambdaUpdate().eq(SysUser::getId, id));
         userMapper.incrRoleVersion(id);
         userMapper.revokeAllTokens(id);

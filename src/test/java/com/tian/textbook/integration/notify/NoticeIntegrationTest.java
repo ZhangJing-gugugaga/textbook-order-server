@@ -157,6 +157,59 @@ class NoticeIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("窗口变更合并后重发再变更：轮次重置不得撞 uk_notice_round（否则窗口永远关不上）")
+    void onWindowChange_afterResend_doesNotCollideWithSoftDeletedRounds() {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("征订窗口通知", "初始内容"));
+
+        // 复现序列（正常运维即可发生）：
+        // ① 发一轮（round_no=1，deleted=0）→ ② 变更①重置（该轮记录软删为 t1）
+        // → ③ 再发一轮（轮次从 1 重开，新建 round_no=1、deleted=0）→ ④ 变更②重置。
+        // 若重置语句漏了 deleted=0 谓词，第 ④ 步会把「软删的旧记录」与「本轮新建记录」改成
+        // 同一个 deleted 时间戳，撞 uk_notice_round 抛 1062 → 整个窗口变更事务回滚；而自动截止
+        // 由每分钟定时任务驱动，于是每分钟重试、每分钟失败，窗口再也关不上（延长/提前截止同样失败）。
+        notifyService.resendTask(noticeTaskMapper.selectByIdSoft(task.getId()));
+        notifyService.onWindowChange(semesterId, "征订窗口变更通知", "窗口已延长至 2026-10-01");
+        notifyService.resendTask(noticeTaskMapper.selectByIdSoft(task.getId()));
+        assertThat(noticeRecordMapper.selectList(Wrappers.<NoticeRecord>lambdaQuery()
+                .eq(NoticeRecord::getTaskId, task.getId())
+                .eq(NoticeRecord::getDeleted, 0))).isNotEmpty();
+
+        notifyService.onWindowChange(semesterId, "征订窗口变更通知", "窗口再次延长至 2026-10-08");
+
+        NoticeTask after = noticeTaskMapper.selectByIdSoft(task.getId());
+        assertThat(after.getContent()).isEqualTo("初始内容\n窗口已延长至 2026-10-01\n窗口再次延长至 2026-10-08");
+        // 重置后：未确认轮次记录全部软删（deleted != 0），且旧记录保持各自的时间戳
+        assertThat(noticeRecordMapper.selectList(Wrappers.<NoticeRecord>lambdaQuery()
+                .eq(NoticeRecord::getTaskId, task.getId())
+                .eq(NoticeRecord::getDeleted, 0))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("窗口变更合并进手动任务：target_roles 取并集（教师/秘书也必须收到）")
+    void onWindowChange_mergingManualTask_expandsTargetRoles() {
+        seed();
+        asAdmin();
+        // 手动任务默认只面向 STUDENT
+        var task = notifyService.createTask(createRequest("教材征订提醒", "请尽快提交征订"));
+        assertThat(task.getTargetRoles()).isEqualTo("STUDENT");
+
+        notifyService.onWindowChange(semesterId, "征订窗口变更通知", "窗口已延长至 2026-10-01");
+
+        // 只追加内容不改 target_roles 的话，延期信息只有学生看得到（同学期只允许一个 active
+        // 任务，管理员也无法补发第二条给教师）
+        NoticeTask merged = noticeTaskMapper.selectByIdSoft(task.getId());
+        assertThat(merged.getTargetRoles().split(","))
+                .containsExactlyInAnyOrder("STUDENT", "SECRETARY", "TEACHER");
+
+        // 教师视角确认可见（按 target_roles 定向过滤）
+        TestSecurity.authenticate(teacherId, "TH1", "教师一", Set.of("TEACHER"), "TEACHER",
+                seeder.permissionsOf("TEACHER"));
+        assertThat(notifyService.listUnconfirmed()).extracting("taskId").contains(task.getId());
+    }
+
+    @Test
     @DisplayName("onWindowChange：无 active 任务时自动创建（source=system_window_change）")
     void onWindowChange_withoutActiveTask_createsSystemTask() {
         seed();

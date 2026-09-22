@@ -105,29 +105,35 @@ public class SemesterService {
             validateWindowRange(request.windowStart() != null ? request.windowStart() : semester.getWindowStart(),
                     request.windowEnd() != null ? request.windowEnd() : semester.getWindowEnd());
         }
+        // 只写请求里出现的字段（定向 UPDATE），不用 updateById 回写整实体：
+        // 实体是「读出来的旧快照」，整实体回写会把 window_status / channel_open / active_status /
+        // version 一并按旧值写回。两个真实后果：① 管理员编辑基本信息期间窗口到点自动截止 →
+        // 提交后窗口被静默重新打开且 version 回退；② 编辑 draft 学期期间它被激活 → 提交后
+        // 写回 draft，系统变成「无 active 学期」，全站业务接口报「尚未激活任何学期」。
+        var update = Wrappers.<Semester>lambdaUpdate().eq(Semester::getId, id);
         if (request.name() != null && !request.name().isBlank()) {
-            semester.setName(request.name().trim());
+            update.set(Semester::getName, request.name().trim());
         }
         if (request.startDate() != null) {
-            semester.setStartDate(request.startDate());
+            update.set(Semester::getStartDate, request.startDate());
         }
         if (request.endDate() != null) {
-            semester.setEndDate(request.endDate());
+            update.set(Semester::getEndDate, request.endDate());
         }
         if (request.windowStart() != null) {
-            semester.setWindowStart(request.windowStart());
+            update.set(Semester::getWindowStart, request.windowStart());
         }
         if (request.windowEnd() != null) {
-            semester.setWindowEnd(request.windowEnd());
+            update.set(Semester::getWindowEnd, request.windowEnd());
         }
         if (request.autoOpen() != null) {
-            semester.setAutoOpen(request.autoOpen());
+            update.set(Semester::getAutoOpen, request.autoOpen());
         }
         if (request.autoClose() != null) {
-            semester.setAutoClose(request.autoClose());
+            update.set(Semester::getAutoClose, request.autoClose());
         }
-        semesterMapper.updateById(semester);
-        return semester;
+        semesterMapper.update(null, update);
+        return semesterMapper.selectByIdSoft(id);
     }
 
     // ============ 双缓冲原子切换（W1/W6，SPEC §7） ============

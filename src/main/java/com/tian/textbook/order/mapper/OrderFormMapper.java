@@ -28,6 +28,21 @@ public interface OrderFormMapper extends BaseMapper<OrderForm> {
     @Select("SELECT * FROM order_form WHERE id = #{id} AND deleted = 0")
     OrderForm selectByIdSoft(@Param("id") Long id);
 
+    /**
+     * 加行锁读取（提交路径专用）：把「读状态 → 整单覆盖写」与并发审核串行化。
+     *
+     * <p>提交侧的终态校验是「读后判断」，与管理员审核并发时拦不住：T1 读到 pending_review
+     * → T2 审核 pass 提交（reviewed）→ T1 的 {@code updateById}（按主键无条件）写回
+     * pending_review 并清空审核字段，审批结论被静默撤销，而 audit_log 里仍留着「已审核通过」。
+     * 提交事务内先对该行加 X 锁并重读状态，两种交织都收敛：审核先提交 → 这里读到 reviewed
+     * 直接按终态拒绝；提交先持锁 → 审核的 CAS（status + content_version 双谓词）在提交后
+     * 因版本已 +1 而命中 0 行 → 409。锁粒度是单个表单行（一教师一学期一单），冲突面仅
+     * 「同一表单的提交与审核」，不波及其它教师。</p>
+     */
+    @ResultMap(RESULT_MAP)
+    @Select("SELECT * FROM order_form WHERE id = #{id} AND deleted = 0 FOR UPDATE")
+    OrderForm selectByIdForUpdate(@Param("id") Long id);
+
     /** 教师本人历史提交记录（数据隔离：teacher_id = 本人） */
     @ResultMap(RESULT_MAP)
     @CollegeScope(teacherColumn = "teacher_id")

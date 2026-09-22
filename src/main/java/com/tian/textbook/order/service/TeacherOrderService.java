@@ -245,8 +245,17 @@ public class TeacherOrderService {
             // 文案不再引导「联系教材室驳回后补正」：审核接口只接受 pending_review，reviewed 是
             // 终态（PRD 状态机退出条件为「—」），教材室在系统内同样驳不回——原文案给出的是一条
             // 走不通的路径。改为如实说明终态与线下处理。
-            throw new BizException(ErrorCode.STATE_CONFLICT,
-                    "该征订单已通过审核，为终态不可修改（系统不提供撤销审核）；如确需变更请联系教材室线下处理");
+            throw reviewedTerminal();
+        }
+
+        if (form.getId() != null) {
+            // 加行锁重读：上面的状态检查是「读后判断」，与管理员审核并发时拦不住
+            // （审核先提交 → 无条件 updateById 会把 reviewed 改回 pending_review）。
+            // 详见 OrderFormMapper#selectByIdForUpdate 的说明。
+            form = orderFormMapper.selectByIdForUpdate(form.getId());
+            if (form == null || REVIEWED.equals(form.getStatus())) {
+                throw reviewedTerminal();
+            }
         }
 
         if (!issues.isEmpty()) {
@@ -500,6 +509,14 @@ public class TeacherOrderService {
         LocalDateTime anchor = semester != null && semester.getWindowEnd() != null
                 ? semester.getWindowEnd() : base;
         return anchor.plusDays(configService.getInt(ConfigService.ORDER_CORRECT_WINDOW_DAYS, 7));
+    }
+
+    /**
+     * reviewed 终态的统一拒绝（教师重提路径；文案不再引导走不通的「驳回后补正」）。
+     */
+    private static BizException reviewedTerminal() {
+        return new BizException(ErrorCode.STATE_CONFLICT,
+                "该征订单已通过审核，为终态不可修改（系统不提供撤销审核）；如确需变更请联系教材室线下处理");
     }
 
     /** upsert：无 id 插入，有 id 更新（updateById 对 JSON 字段应用 typeHandler，null 字段跳过由显式清理补齐） */

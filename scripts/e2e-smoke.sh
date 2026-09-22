@@ -10,6 +10,8 @@
 # 用法：
 #   ./scripts/e2e-smoke.sh [baseUrl]           默认 http://127.0.0.1:8080
 #
+# 目标库由 SMOKE_DB 声明（默认只接受一次性库；R1 段会直接写该库的 sys_user 锁定字段）
+#
 # 依赖 db/data-seed.sql 的演示数据：
 #   学期 1（active, window open）/ 教师 700101 ↔ 课程1 数据结构 / 班级2 软工2023-1 /
 #   教材 1 / 学生 20230101 在班级 2 / 秘书 800101 在学院 1 / 供货商 600001
@@ -77,6 +79,33 @@ post_file() { # path token body outfile → 打印 content_type
 }
 
 echo "目标：$BASE"
+
+# ---------------------------------------------------------------------------
+# 目标库声明（防误伤演示/试运行库）：
+#   本脚本会真实提交并**审核通过**一张征订单（reviewed 是终态、无撤销接口），还会改动账号
+#   锁定状态与班级人数，因此**不应**对着演示库或试运行库跑——第二轮必然失败且留下脏数据。
+#   默认只允许 scratch 库（名字以 textbook_smoke 开头，通常由 scripts/smoke-isolated.sh 创建）；
+#   确有需要对着共享库跑时显式声明：SMOKE_DB=textbook_order ALLOW_SHARED_DB=1 ...
+# ---------------------------------------------------------------------------
+SMOKE_DB="${SMOKE_DB:-}"
+if [ -z "$SMOKE_DB" ]; then
+  echo "缺少目标库声明：SMOKE_DB=<库名>。推荐直接用独立库跑：bash scripts/smoke-isolated.sh" >&2
+  exit 2
+fi
+case "$SMOKE_DB" in
+  textbook_smoke*) ;;
+  *)
+    if [ "${ALLOW_SHARED_DB:-0}" != "1" ]; then
+      echo "拒绝执行：SMOKE_DB=$SMOKE_DB 不是一次性库（应形如 textbook_smoke*）。" >&2
+      echo "  · 推荐：bash scripts/smoke-isolated.sh（自动建库/起服务/跑完即弃）" >&2
+      echo "  · 确需对着共享库跑：SMOKE_DB=$SMOKE_DB ALLOW_SHARED_DB=1 bash scripts/e2e-smoke.sh" >&2
+      echo "  · 共享库前置：种子教师 700101 的征订单必须处于可提交状态（reviewed 是终态，见 API.md §3.6）" >&2
+      exit 2
+    fi
+    ;;
+esac
+echo "目标库：$SMOKE_DB"
+
 if ! curl -sS -o /dev/null "$BASE/actuator/health" 2>/dev/null; then
   echo "服务未就绪，请先启动应用（见脚本头部说明）"; exit 2
 fi
@@ -103,6 +132,20 @@ expect_code "GET /api/export-task/999999 → NOT_FOUND" "$(api GET /api/export-t
 head_ "2. TEACHER（教师甲 700101）"
 TEACHER=$(login 700101 'Tea@12345')
 [ -n "$TEACHER" ] && ok "登录成功" || bad "登录失败"
+# 前置检查：本节的「提交 → 审核」要求表单可提交；reviewed 是终态（无撤销接口），
+# 共享库上跑过一轮后必然停在这里。给出可执行指引，而不是让后续断言连环失败。
+PRE_FORM=$(api GET /api/teacher/order-form "$TEACHER")
+PRE_STATUS=$(jget "$PRE_FORM" "print(((d.get('data') or {}).get('status') or ''))")
+if [ "$PRE_STATUS" = "reviewed" ]; then
+  bad "前置不满足：700101 的征订单已是 reviewed（终态，无法再次提交）"
+  echo "     → 推荐改用一次性库：bash scripts/smoke-isolated.sh" >&2
+  echo "     → 或在共享库恢复夹具（需 DBA）：UPDATE order_form SET status='rejected', review_by=NULL, review_at=NULL," >&2
+  echo "       review_note=NULL, correct_deadline=DATE_ADD(NOW(), INTERVAL 7 DAY) WHERE id=<formId> AND deleted=0;" >&2
+  printf '
+[1m结果：前置检查未通过，已中止[0m
+' >&2
+  exit 2
+fi
 expect_ok "GET /api/teacher/my-courses"    "$(api GET /api/teacher/my-courses "$TEACHER")"
 expect_ok "GET /api/teacher/textbook（中文关键词 URL 编码）" \
   "$(api GET '/api/teacher/textbook?keyword=%E6%95%B0%E6%8D%AE' "$TEACHER")"
@@ -205,25 +248,30 @@ if [ "${CORS_CNT:-0}" = "0" ]; then ok "S24 未配置白名单时不下发 CORS 
 
 # ============================================================================
 head_ "9. 失败计数与锁定（R1，用已启用的 700102 验证后恢复现场）"
-MY=/e/tools/mysql/mysql-8.0.29-winx64/bin/mysql.exe
-if [ -x "$MY" ]; then
-  "$MY" -h127.0.0.1 -P3306 -uroot -proot textbook_order -e \
+MY="${MYSQL_CLI:-}"
+if [ -z "$MY" ]; then
+  if command -v mysql >/dev/null 2>&1; then MY="$(command -v mysql)"
+  elif [ -x "E:/tools/mysql/mysql-8.0.29-winx64/bin/mysql.exe" ]; then MY="E:/tools/mysql/mysql-8.0.29-winx64/bin/mysql.exe"; fi
+fi
+if [ -n "$MY" ] && [ -x "$MY" ]; then
+  "$MY" -h127.0.0.1 -P3306 -u"${DB_USERNAME:-root}" -p"${DB_PASSWORD:-root}" "$SMOKE_DB" -e \
     "UPDATE sys_user SET fail_count=0, lock_until=NULL WHERE user_no='700102';" 2>/dev/null
   for _ in 1 2 3 4 5; do
     curl -sS -o /dev/null -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
       -d '{"userNo":"700102","password":"definitely-wrong-1","deviceId":"e2e"}'
   done
-  LOCKED=$("$MY" -h127.0.0.1 -P3306 -uroot -proot textbook_order -N -B -e \
+  LOCKED=$("$MY" -h127.0.0.1 -P3306 -u"${DB_USERNAME:-root}" -p"${DB_PASSWORD:-root}" "$SMOKE_DB" -N -B -e \
     "SELECT IF(lock_until IS NULL,'NO','YES') FROM sys_user WHERE user_no='700102';" 2>/dev/null)
   if [ "$LOCKED" = "YES" ]; then ok "R1 连续 5 次失败后 lock_until 已写入"; else bad "R1 lock_until 未写入（$LOCKED）"; fi
   expect_code "R1 锁定后返回 ACCOUNT_LOCKED" \
     "$(curl -sS -X POST "$BASE/api/auth/login" -H 'Content-Type: application/json' \
         -d '{"userNo":"700102","password":"whatever-1","deviceId":"e2e"}')" ACCOUNT_LOCKED
-  "$MY" -h127.0.0.1 -P3306 -uroot -proot textbook_order -e \
+  "$MY" -h127.0.0.1 -P3306 -u"${DB_USERNAME:-root}" -p"${DB_PASSWORD:-root}" "$SMOKE_DB" -e \
     "UPDATE sys_user SET fail_count=0, lock_until=NULL WHERE user_no='700102';" 2>/dev/null
   echo "     → 已解锁 700102（恢复现场）"
 else
-  echo "     → 跳过（未找到本地 mysql 客户端）"
+  # 之前这里只打印「跳过」，但断言数照旧计入 PASS 口径 —— 等于把未验证当成通过。
+  echo "     → 跳过（未找到 mysql 客户端；本段 2 项断言未执行，不计入 PASS）"
 fi
 
 # ============================================================================

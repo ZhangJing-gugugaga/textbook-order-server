@@ -32,11 +32,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -67,6 +72,8 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
     private OrderScenarioFactory scenarioFactory;
     @Autowired
     private TestDataSeeder seeder;
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     private OrderScenarioFactory.Scenario scenario;
     private Long adminId;
@@ -275,8 +282,68 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
                 .hasMessageContaining("不能再次审核");
     }
 
-    // ============ 学生选购清单（W3） ============
+    @Test
+    @DisplayName("提交与审核并发：审核先提交时，提交必须 409 且不得把 reviewed 改回（行锁串行化）")
+    void submit_concurrentReview_doesNotRevertReviewedState() throws Exception {
+        seedScenario("OR");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
 
+        // 复现「读后判断」的并发缺口：T1 教师读到 pending_review → T2 审核 pass 提交（reviewed）
+        // → T1 的无条件 updateById 写回 pending_review 并清空审核字段，审批结论被静默撤销
+        // （audit_log 里却留着「已审核通过」）。这里用行锁构造确定性的交织：主线程先持锁并置
+        // reviewed，提交线程只能在锁释放后重读状态。
+        CountDownLatch submitStarted = new CountDownLatch(1);
+        AtomicReference<Throwable> submitError = new AtomicReference<>();
+        Thread submitThread = new Thread(() -> {
+            TestSecurity.authenticate(scenario.teacherId(), "T" + scenario.semesterId(), "教师",
+                    Set.of("TEACHER"), "TEACHER", seeder.permissionsOf("TEACHER"));
+            SemesterContextHolder.set(scenario.semesterId());
+            submitStarted.countDown();
+            try {
+                teacherOrderService.submit(validItems());
+            } catch (Throwable t) {
+                submitError.set(t);
+            }
+        }, "concurrent-submit");
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+            orderFormMapper.selectByIdForUpdate(submitted.getId());
+            orderFormMapper.update(null, Wrappers.<OrderForm>lambdaUpdate()
+                    .eq(OrderForm::getId, submitted.getId())
+                    .set(OrderForm::getStatus, "reviewed"));
+            submitThread.start();
+            assertThat(await(submitStarted)).as("提交线程已启动").isTrue();
+            sleepQuietly(250); // 让它到达 FOR UPDATE 等待（即便没等到，也只是退化为读到 reviewed，不会误判）
+        });
+        submitThread.join(10_000);
+
+        assertThat(submitError.get())
+                .as("审核已提交后，教师重提必须被终态拒绝")
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(((BizException) e).getErrorCode()).isEqualTo(ErrorCode.STATE_CONFLICT));
+        OrderForm reloaded = orderFormMapper.selectByIdSoft(submitted.getId());
+        assertThat(reloaded.getStatus()).as("审批结论不得被提交覆盖").isEqualTo("reviewed");
+    }
+
+    private static boolean await(CountDownLatch latch) {
+        try {
+            return latch.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // ============ 学生选购清单（W3） ============
     @Test
     @DisplayName("学生 book-list：reviewed 后教材入清单 required=true；表单被驳回后 delisted=true")
     void studentBookList_reflectsReviewAndRejection() {

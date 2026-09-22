@@ -8,7 +8,7 @@ spring:
       data-locations: classpath:db/data-permission.sql,classpath:db/data-seed.sql
       continue-on-error: false
   datasource:
-    url: ${DB_URL:jdbc:mysql:<SECRET_824596b7>}
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/textbook_order?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
 
 springdoc:
   api-docs:

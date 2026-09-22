@@ -401,11 +401,20 @@ public class NotifyService implements WindowChangeNotifier {
         update.setId(task.getId());
         update.setTitle(truncate(title, 120));
         update.setContent(truncate(merged, 500));
+        // 接收范围取并集：合并目标可能是管理员手动建的 STUDENT-only 任务，若只追加内容不改
+        // target_roles，延期信息就只有学生看得到（教师/秘书永远收不到），而同学期只允许一个
+        // active 任务、管理员无法补发第二条 —— 与 PRD「范围=秘书+教师+学生」不符。
+        update.setTargetRoles(unionRoles(task.getTargetRoles(), WINDOW_CHANGE_TARGET_ROLES));
         noticeTaskMapper.update(update, Wrappers.<NoticeTask>lambdaUpdate()
                 .eq(NoticeTask::getId, task.getId()));
         // 重置轮次计数：逻辑删除未确认的轮次发送记录（deleted=毫秒时间戳，唯一键含 deleted 可重建）
+        // deleted=0 谓词不可省：上一次重置已把旧记录软删（deleted=t1），若这里把旧记录一起改写为同一个
+        // t2，就会与「重置后重发新建的 (task,user,round_no) 记录」撞 uk_notice_round —— 整个窗口变更
+        // 事务回滚；自动截止由每分钟的定时任务驱动，于是每分钟重试、每分钟失败，窗口再也关不上
+        // （延长/提前截止同样失败），教师/学生可在截止后继续提交。
         long reset = noticeRecordMapper.update(null, Wrappers.<NoticeRecord>lambdaUpdate()
                 .eq(NoticeRecord::getTaskId, task.getId())
+                .eq(NoticeRecord::getDeleted, 0)
                 .isNotNull(NoticeRecord::getRoundNo)
                 .isNull(NoticeRecord::getConfirmedAt)
                 .set(NoticeRecord::getDeleted, System.currentTimeMillis()));
@@ -709,6 +718,28 @@ public class NotifyService implements WindowChangeNotifier {
         item.setRoundNo(toIntegerObject(row.get("roundNo")));
         item.setSentAt(toDateTime(row.get("sentAt")));
         return item;
+    }
+
+    /**
+     * 角色范围并集（逗号分隔，保持 existing 顺序、追加 required 中缺失项）。
+     *
+     * <p>用于窗口变更合并进既有 active 任务时扩大接收范围：手动任务的 target_roles 默认只有
+     * STUDENT，而窗口变更必须触达 SECRETARY/TEACHER/STUDENT（PRD 模块 7）。</p>
+     */
+    private static String unionRoles(String existing, String required) {
+        java.util.LinkedHashSet<String> roles = new java.util.LinkedHashSet<>();
+        for (String source : new String[]{existing, required}) {
+            if (source == null || source.isBlank()) {
+                continue;
+            }
+            for (String role : source.split(",")) {
+                String code = role.trim();
+                if (!code.isEmpty()) {
+                    roles.add(code);
+                }
+            }
+        }
+        return String.join(",", roles);
     }
 
     /**

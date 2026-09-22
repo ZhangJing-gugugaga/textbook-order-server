@@ -39,9 +39,59 @@ public class StartupSelfCheck implements InitializingBean {
     @Override
     public void afterPropertiesSet() {
         assertProfilePresent();
+        assertLocalProfileUsesLocalDb();
         assertTmpDirWritable();
         configureTrustedProxies();
         warnIfWeixinNotConfigured();
+    }
+
+    /**
+     * local profile 只允许连本机数据库（第二道硬闸）。
+     *
+     * <p>{@link #assertProfilePresent()} 只能保证「profile 非空」，拦不住运维把
+     * {@code SPRING_PROFILES_ACTIVE} 误写成 {@code local}——那会让 {@code spring.sql.init}
+     * 向生产库执行 schema.sql + data-permission.sql + data-seed.sql，写入 18 个口令公开的
+     * 测试账号（含超管 900001/Admin@123）。这里再加一道：local + 非环回主机 → 拒绝启动。</p>
+     */
+    private void assertLocalProfileUsesLocalDb() {
+        boolean local = false;
+        for (String profile : environment.getActiveProfiles()) {
+            if ("local".equals(profile)) {
+                local = true;
+                break;
+            }
+        }
+        if (!local) {
+            return;
+        }
+        String url = environment.getProperty("spring.datasource.url", "");
+        if (url == null || !url.startsWith("jdbc:mysql")) {
+            return;
+        }
+        String host = hostOf(url);
+        if (!"127.0.0.1".equals(host) && !"localhost".equalsIgnoreCase(host) && !"::1".equals(host)) {
+            throw new IllegalStateException(
+                    "local profile 只能连接本机数据库（当前 DB_URL 主机 = " + host + "）。"
+                            + "local profile 会执行建库与种子脚本，连到生产库会写入口令公开的测试账号；"
+                            + "生产请使用 SPRING_PROFILES_ACTIVE=trial|school。");
+        }
+    }
+
+    /** 从 JDBC URL 取主机名（{@code jdbc:mysql://host:port/db}）。 */
+    private static String hostOf(String url) {
+        int start = url.indexOf("//");
+        if (start < 0) {
+            return "";
+        }
+        String rest = url.substring(start + 2);
+        int end = rest.length();
+        for (char delimiter : new char[]{':', '/'}) {
+            int index = rest.indexOf(delimiter);
+            if (index >= 0 && index < end) {
+                end = index;
+            }
+        }
+        return rest.substring(0, end);
     }
 
     /** 注入可信代理白名单（IpUtils 是静态工具，无 Spring 上下文）。 */

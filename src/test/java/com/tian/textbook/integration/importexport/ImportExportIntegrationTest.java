@@ -205,6 +205,34 @@ class ImportExportIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("draft 学期名单导入：只写 profile，不得全局停用 active 学期在册账号")
+    void importIntoDraftSemester_doesNotDisableActiveAccounts() {
+        seed();
+        // 先在 active 学期导入两名学生（建立「在册」基线）
+        Long first = importService.startImport("student", semesterId, studentFile(
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
+                "2024002|李四|计算机学院|软件工程|软工2401|13800000002"));
+        assertThat(awaitDone(first).getStatus()).isEqualTo("done");
+
+        // 新建 draft 学期（非 active），只导入其中一人
+        Semester draft = seeder.semester("2027-2028-1", null, null, null, null, 1, 1);
+        Long second = importService.startImport("student", draft.getId(), studentFile(
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001"));
+        assertThat(awaitDone(second).getStatus()).isEqualTo("done");
+
+        // 停用比对只在「目标学期 = active 学期」时生效：draft 导入不得停用 active 在册账号
+        // （sys_user.college_id 是 active 学期归属冗余列，拿它当 draft 的比对基准会错位，
+        //   把当前在册学生/教师全部全局停用 + 撤销 refresh 直接踢下线）
+        SysUser kept = userMapper.selectByUserNo("2024002");
+        assertThat(kept.getStatus()).as("active 学期在册学生不得被 draft 导入停用").isEqualTo(1);
+        var keptProfile = profileMapper.selectByUserAndSemester(kept.getId(), semesterId);
+        assertThat(keptProfile.getStatus()).isEqualTo(1);
+        // draft 学期的 profile 照常写入（导入为权威源）
+        assertThat(profileMapper.selectByUserAndSemester(userMapper.selectByUserNo("2024001").getId(),
+                draft.getId())).isNotNull();
+    }
+
+    @Test
     @DisplayName("班级人数（W2）：按去重学号统计（重复行不放大上限），下调写入审计摘要")
     void importStudents_classSizeCountsDistinctUserNos() {
         seed();
