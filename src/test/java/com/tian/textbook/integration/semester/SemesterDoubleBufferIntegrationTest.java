@@ -137,6 +137,29 @@ class SemesterDoubleBufferIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("归档不可逆：archived 学期不能再激活，文案明说不可逆（前端确认弹窗据此提示）")
+    void archivedSemester_cannotBeActivatedAgain() {
+        Semester semester = seeder.semester("2025-2026-4", LocalDate.of(2025, 9, 1),
+                LocalDate.of(2026, 1, 15), null, null, 1, 1);
+        semesterMapper.activateIfDraft(semester.getId(), semester.getVersion());
+        semesterService.archive(semester.getId());
+        assertThat(semesterMapper.selectByIdSoft(semester.getId()).getActiveStatus()).isEqualTo("archived");
+
+        // 归档后无法回到 active：没有「取消归档」接口，也没有 active→draft 的回退路径
+        assertThatThrownBy(() -> semesterService.activate(semester.getId(),
+                new SemesterActivateRequest(semester.getVersion())))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(((BizException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.STATE_CONFLICT))
+                .hasMessageContaining("归档不可逆");
+
+        // 重复归档同样被拒（且文案说明归档不可逆）
+        assertThatThrownBy(() -> semesterService.archive(semester.getId()))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("归档不可逆");
+    }
+
+    @Test
     @DisplayName("activate：库中 version 已被并发修改 → 409 STATE_CONFLICT 且无 active 学期产生")
     void activate_staleVersionInDb_returns409() {
         Semester draft = seeder.semester("2026-2027-3", LocalDate.of(2026, 9, 1),

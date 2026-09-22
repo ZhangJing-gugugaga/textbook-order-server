@@ -147,7 +147,11 @@ public class SemesterService {
                 throw new BizException(ErrorCode.NOT_FOUND, "学期不存在");
             }
             if (!"draft".equals(target.getActiveStatus())) {
-                throw new BizException(ErrorCode.STATE_CONFLICT, "仅 draft 学期可激活");
+                // 归档不可逆：没有「取消归档 / 回退切换」接口，归档学期永远回不到 active。
+                // 文案直接说明，避免调用方（或运维）以为重试/换参数就能激活。
+                throw new BizException(ErrorCode.STATE_CONFLICT, "archived".equals(target.getActiveStatus())
+                        ? "该学期已归档，归档不可逆（系统不提供取消归档），不能再次激活；仅 draft 学期可激活"
+                        : "仅 draft 学期可激活");
             }
             if (!target.getVersion().equals(request.version())) {
                 throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的学期状态，请刷新");
@@ -188,14 +192,20 @@ public class SemesterService {
         }
     }
 
-    /** 手动归档（仅 active 学期；归档后数据只读保留，可查可导，D2-A） */
+    /**
+     * 手动归档（仅 active 学期；归档后数据只读保留，可查可导，D2-A）。
+     *
+     * <p>**不可逆**：归档后不能再次激活，也没有回退接口；active→draft 的路径同样不存在
+     * （draft 只能由新建产生）。因此调用方必须在确认弹窗里明确「此操作不可撤销」。</p>
+     */
     @Transactional
     public void archive(Long id) {
         SEMESTER_LOCK.lock();
         try {
             Semester semester = get(id);
             if (!"active".equals(semester.getActiveStatus())) {
-                throw new BizException(ErrorCode.STATE_CONFLICT, "仅 active 学期可归档");
+                throw new BizException(ErrorCode.STATE_CONFLICT,
+                        "仅 active 学期可归档；且归档不可逆（归档后不能再次激活）");
             }
             int archived = semesterMapper.archiveIfActive(id);
             if (archived == 0) {

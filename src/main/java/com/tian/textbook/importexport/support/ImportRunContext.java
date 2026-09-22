@@ -30,7 +30,7 @@ import java.util.Set;
  * <ul>
  *   <li>外键查找缓存（学院/专业/班级/用户/学期/角色），万行导入把重复查询降到 O(去重实体数)；</li>
  *   <li>停用比对范围（W14）：文件内 user_no 集合 + 文件内学院集合；</li>
- *   <li>班级人数重算：班级 → 文件内出现次数。</li>
+ *   <li>班级人数重算：班级 → 文件内**去重学生学号**集合（重复行不重复计数，见 {@link #recordClass}）。</li>
  * </ul>
  */
 public class ImportRunContext {
@@ -43,7 +43,8 @@ public class ImportRunContext {
 
     private final Set<String> userNos = new HashSet<>();
     private final Set<Long> collegeIds = new HashSet<>();
-    private final Map<Long, Integer> classCounts = new HashMap<>();
+    /** 班级 → 文件内出现的学生学号（用 Set 去重：同一学号出现多行只算 1 人） */
+    private final Map<Long, Set<String>> classMembers = new HashMap<>();
 
     private final Map<String, College> collegeCache = new HashMap<>();
     private final Map<String, Major> majorCache = new HashMap<>();
@@ -107,8 +108,11 @@ public class ImportRunContext {
         return collegeIds;
     }
 
+    /** 班级 → 该班在本次文件中的**去重**学生人数（W2 班级人数来源） */
     public Map<Long, Integer> classCounts() {
-        return classCounts;
+        Map<Long, Integer> counts = new HashMap<>(classMembers.size());
+        classMembers.forEach((classId, members) -> counts.put(classId, members.size()));
+        return counts;
     }
 
     public void recordUser(String userNo) {
@@ -119,8 +123,14 @@ public class ImportRunContext {
         collegeIds.add(collegeId);
     }
 
-    public void recordClass(Long classId) {
-        classCounts.merge(classId, 1, Integer::sum);
+    /**
+     * 记录班级名单成员（学生名单导入专用，W2 班级人数来源）。
+     *
+     * <p>按学号去重：同一学号在文件里出现多行只算 1 人。此前按「行数」计数，
+     * 重复行会把班级人数算大（进而把教师数量上限放大到不存在的规模）。</p>
+     */
+    public void recordClass(Long classId, String userNo) {
+        classMembers.computeIfAbsent(classId, key -> new HashSet<>()).add(userNo);
     }
 
     // ============ 缓存外键查找 ============

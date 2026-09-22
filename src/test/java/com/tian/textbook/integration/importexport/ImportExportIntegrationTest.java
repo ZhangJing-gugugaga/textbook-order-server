@@ -26,6 +26,7 @@ import com.tian.textbook.support.OrderScenarioFactory;
 import com.tian.textbook.support.TestDataSeeder;
 import com.tian.textbook.support.TestSecurity;
 import com.tian.textbook.system.entity.SysUser;
+import com.tian.textbook.system.audit.AuditService;
 import com.tian.textbook.system.mapper.SchoolClassMapper;
 import com.tian.textbook.system.mapper.SysUserMapper;
 import com.tian.textbook.system.user.UserService;
@@ -76,6 +77,8 @@ class ImportExportIntegrationTest extends IntegrationTestBase {
     private AuthService authService;
     @Autowired
     private TeacherOrderService teacherOrderService;
+    @Autowired
+    private AuditService auditService;
     @Autowired
     private OrderScenarioFactory scenarioFactory;
     @Autowired
@@ -196,9 +199,37 @@ class ImportExportIntegrationTest extends IntegrationTestBase {
         assertThat(profile.getCollegeId()).isEqualTo(collegeA);
         assertThat(profile.getClassId()).isEqualTo(classA1);
 
-        // 班级人数 = 文件内出现次数（W2）
+        // 班级人数 = 文件内该班**去重**学生数（W2，以名单为准）
         assertThat(classMapper.selectByIdSoft(classA1).getStudentCount()).isEqualTo(2);
         assertThat(classMapper.selectByIdSoft(classA2).getStudentCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("班级人数（W2）：按去重学号统计（重复行不放大上限），下调写入审计摘要")
+    void importStudents_classSizeCountsDistinctUserNos() {
+        seed();
+        // 预置「已维护的真实人数」50：局部名单会把上限改小，必须留痕（否则教师填报莫名被卡）
+        classMapper.update(null, com.baomidou.mybatisplus.core.toolkit.Wrappers
+                .<com.tian.textbook.system.entity.SchoolClass>lambdaUpdate()
+                .eq(com.tian.textbook.system.entity.SchoolClass::getId, classA1)
+                .set(com.tian.textbook.system.entity.SchoolClass::getStudentCount, 50));
+
+        Long batchId = importService.startImport("student", semesterId, studentFile(
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
+                "2024002|李四|计算机学院|软件工程|软工2401|13800000002"));
+        ImportBatch batch = awaitDone(batchId);
+        assertThat(batch.getStatus()).isEqualTo("done");
+
+        // 3 行但只有 2 个学号 → 2 人（此前按行数计数会把上限算成 3）
+        assertThat(classMapper.selectByIdSoft(classA1).getStudentCount()).isEqualTo(2);
+
+        // 审计摘要记录班级人数更新与下调数（供管理员追溯「上限为何变小」）
+        var audit = auditService.query(null, null, AuditService.IMPORT, "import_batch", null, null, 1, 20);
+        assertThat(audit.list()).isNotEmpty();
+        assertThat(audit.list().get(0).getDetailJson())
+                .containsEntry("classSizeUpdates", 1)
+                .containsEntry("classSizeShrinks", 1);
     }
 
     @Test

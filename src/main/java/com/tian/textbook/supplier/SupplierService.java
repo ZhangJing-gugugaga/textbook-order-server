@@ -4,6 +4,7 @@ import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.semester.SemesterContextHolder;
 import com.tian.textbook.importexport.ExportService;
+import com.tian.textbook.importexport.dto.ExportPlan;
 import com.tian.textbook.importexport.entity.ExportTask;
 import com.tian.textbook.supplier.dto.SupplierCollegeGroup;
 import com.tian.textbook.supplier.dto.SupplierExportRequest;
@@ -48,6 +49,9 @@ public class SupplierService {
     /** 清单接口行数上限（超出请用导出中心；导出走流式，不受此限） */
     private static final int LIST_ROW_LIMIT = 20_000;
 
+    /** 同步导出文件名（Content-Disposition；异步任务走轮询，不使用该值） */
+    private static final String SYNC_FILE_NAME = "supplier-orders.xlsx";
+
     private final SupplierOrderMapper supplierOrderMapper;
     private final ExportService exportService;
     private final AuditService auditService;
@@ -83,23 +87,29 @@ public class SupplierService {
 
     /**
      * 导出计划判定（一学院一 sheet，由导出中心按 bizType=supplier 生成）：
-     * 预估行数 > export.sync_row_threshold → 建 export_task 返回 taskId（异步）；
-     * ≤ 阈值 → 返回 null，调用方设置响应头后调 {@link #writeSync}。
+     * 预估行数 > export.sync_row_threshold → 建 export_task（异步），返回计划供 Controller 回
+     * {@code {taskId, async, rowEstimate}}；≤ 阈值 → async=false，调用方设置响应头后调
+     * {@link #writeSync}。
+     *
+     * <p>返回计划而非 taskId：其余四类导出的异步受理体都是 {@code {taskId, async, rowEstimate}}
+     * （API.md §3.10），供货商此前只回 {@code {taskId}}——前端只能靠 Content-Type 分流才没踩到。
+     * 同一份契约不该有两种形态。</p>
      */
     @Transactional
-    public Long planExport(SupplierExportRequest request) {
+    public ExportPlan planExport(SupplierExportRequest request) {
         Long semester = requireSemester(request.semesterId());
         long estimate = supplierOrderMapper.countReviewed(semester);
         int rowEstimate = (int) Math.min(estimate, Integer.MAX_VALUE);
+        Map<String, Object> params = Map.of("semesterId", semester);
         if (!exportService.shouldGoAsync(rowEstimate)) {
-            return null;
+            return new ExportPlan(false, null, BIZ_TYPE, params, SYNC_FILE_NAME, rowEstimate);
         }
-        ExportTask task = exportService.createAsyncTask(BIZ_TYPE, Map.of("semesterId", semester), rowEstimate);
+        ExportTask task = exportService.createAsyncTask(BIZ_TYPE, params, rowEstimate);
         auditService.record(AuditService.EXPORT, BIZ_TYPE, String.valueOf(task.getId()),
                 Map.of("op", "export", "mode", "async", "semesterId", String.valueOf(semester),
                         "rows", String.valueOf(estimate)));
         log.info("供货商导出（异步）: task={}, semester={}, 预估行数={}", task.getId(), semester, estimate);
-        return task.getId();
+        return new ExportPlan(true, task.getId(), BIZ_TYPE, params, SYNC_FILE_NAME, rowEstimate);
     }
 
     /**

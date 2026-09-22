@@ -195,11 +195,21 @@ public class ExportServiceImpl implements ExportService {
     }
 
     /**
-     * 进度查询（归属校验）：非 ADMIN 只能看自己创建的任务（created_by=本人），否则 403。
+     * 进度查询（归属校验）：非 ADMIN 只能看自己创建的任务（created_by=本人），否则 404。
+     *
+     * <p>另加 bizType 约束：{@code bizType=supplier} 的任务只能经
+     * {@code /api/supplier/export-task/**} 访问（PRD 模块 8「供货商物理隔离」）。此前只看
+     * created_by，供货商自己的任务经内部端点 {@code /api/export-task/{id}} 同样可读、可下载，
+     * 「物理隔离」名不副实（前端本就走 /api/supplier/**，实测无调用方依赖该路径）。
+     * ADMIN 例外：超管无 {@code supplier:order:export} 权限，若一并拦掉就再没有任何
+     * 排障入口（属运维可见性，非业务可达）。</p>
      */
     public ExportTask getTaskForUser(Long taskId) {
         ExportTask task = getTask(taskId);
         CurrentUser user = SecurityUtils.requireCurrentUser();
+        if (SUPPLIER_BIZ_TYPE.equals(task.getBizType()) && !user.isAdmin()) {
+            throw new BizException(ErrorCode.NOT_FOUND, "导出任务不存在");
+        }
         if (!user.isAdmin() && !user.userId().equals(task.getCreatedBy())) {
             // 统一 404：403 与 404 的差异可被用来探测「该任务 id 是否存在」
             throw new BizException(ErrorCode.NOT_FOUND, "导出任务不存在");

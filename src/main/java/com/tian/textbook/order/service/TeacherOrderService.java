@@ -242,9 +242,11 @@ public class TeacherOrderService {
             // 已通过审核的表单不允许再被覆盖：原实现成功路径不校验当前状态，教师重提会把
             // reviewed 直接改回 pending_review 并清空 review_by/at/note，等于静默撤销审批结论，
             // 学生可选清单与采购导出随之变化，且 order 模块无 @AuditLog 留痕。
-            // 需要修改请走补正流程（管理员驳回产生 rejected + correct_deadline）。
+            // 文案不再引导「联系教材室驳回后补正」：审核接口只接受 pending_review，reviewed 是
+            // 终态（PRD 状态机退出条件为「—」），教材室在系统内同样驳不回——原文案给出的是一条
+            // 走不通的路径。改为如实说明终态与线下处理。
             throw new BizException(ErrorCode.STATE_CONFLICT,
-                    "该征订单已通过审核，不能再次提交；如需修改请联系教材室驳回后补正");
+                    "该征订单已通过审核，为终态不可修改（系统不提供撤销审核）；如确需变更请联系教材室线下处理");
         }
 
         if (!issues.isEmpty()) {
@@ -429,6 +431,12 @@ public class TeacherOrderService {
             throw new BizException(ErrorCode.NOT_FOUND, "征订单不存在");
         }
         if (!"pending_review".equals(form.getStatus())) {
+            // reviewed 是终态：此时「请刷新后重试」会误导管理员以为存在并发竞争，
+            // 反复重试也不可能成功（系统不提供撤销审核），文案须如实说明。
+            if (REVIEWED.equals(form.getStatus())) {
+                throw new BizException(ErrorCode.STATE_CONFLICT,
+                        "该征订单已通过审核（终态），不能再次审核；如需变更请联系教材室线下处理");
+            }
             throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的表单状态，请刷新后重试");
         }
         String action = request.action() == null ? "" : request.action().trim();

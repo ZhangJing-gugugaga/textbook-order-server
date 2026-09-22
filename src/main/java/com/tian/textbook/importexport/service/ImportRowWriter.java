@@ -208,30 +208,54 @@ public class ImportRowWriter {
     // ============ 收尾：班级人数重算 + 停用比对（W14） ============
 
     /**
-     * 导入收尾（独立事务）：① 班级人数 = 文件内出现次数（W2）；
+     * 导入收尾（独立事务）：① 班级人数 = 文件内该班**去重**学生数（W2，以名单为准）；
      * ② 停用比对仅限本次导入覆盖范围（文件内学院 + 角色 + status=1 中不在文件内的用户
      * 停用并置该学期 profile 不在册；范围外一律不动，R11）。
      *
-     * @return 停用用户数（结果摘要 disabledCount）
+     * <p>语义说明（P0 复核项）：{@code school_class.student_count} 是教师征订数量上限的来源，
+     * 由名单导入按「文件内该班人数」重算——与停用比对同一口径（文件即该范围的权威名单）。
+     * 因此**局部名单会把上限改小**（文件里只放了 1 行 → 上限变 1），这是设计而非缺陷；
+     * 为避免管理员在不知情的情况下卡住教师填报，人数被下调时记 WARN 并计入审计摘要
+     * （{@code classSizeUpdates} / {@code classSizeShrinks}），必要时用
+     * {@code PUT /api/admin/class/{id}} 的 {@code studentCount} 手工修正。</p>
+     *
+     * @return 收尾结果（停用数 + 班级人数更新统计），供批次审计与日志使用
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public int finishScope(ImportRunContext ctx) {
+    public ScopeFinishResult finishScope(ImportRunContext ctx) {
+        int updated = 0;
+        int shrinks = 0;
         for (Map.Entry<Long, Integer> entry : ctx.classCounts().entrySet()) {
+            Long classId = entry.getKey();
+            int count = entry.getValue();
+            if (count <= 0) {
+                // 只统计到「文件内出现的班级」，条目必 ≥1；仍显式跳过 0 值，避免任何路径把上限清零
+                continue;
+            }
+            SchoolClass before = schoolClassMapper.selectByIdSoft(classId);
+            int previous = before == null || before.getStudentCount() == null ? 0 : before.getStudentCount();
             schoolClassMapper.update(null, Wrappers.<SchoolClass>lambdaUpdate()
-                    .eq(SchoolClass::getId, entry.getKey())
-                    .set(SchoolClass::getStudentCount, entry.getValue()));
+                    .eq(SchoolClass::getId, classId)
+                    .set(SchoolClass::getStudentCount, count));
+            updated++;
+            if (previous > count) {
+                shrinks++;
+                log.warn("班级人数被名单导入下调: classId={}, {} → {}（若为局部名单，"
+                        + "教师数量上限会随之收紧，请用 PUT /api/admin/class/{} 手工修正）",
+                        classId, previous, count, classId);
+            }
         }
         if (!"student".equals(ctx.bizType()) && !"teacher".equals(ctx.bizType())) {
-            return 0;
+            return new ScopeFinishResult(0, updated, shrinks);
         }
         if (ctx.collegeIds().isEmpty() || ctx.semesterId() == null) {
-            return 0;
+            return new ScopeFinishResult(0, updated, shrinks);
         }
         String roleCode = "student".equals(ctx.bizType()) ? "STUDENT" : "TEACHER";
         Long roleId = ctx.roleId(roleCode);
         if (roleId == null) {
             log.warn("停用比对跳过：角色不存在 {}", roleCode);
-            return 0;
+            return new ScopeFinishResult(0, updated, shrinks);
         }
         List<SysUser> candidates = userMapper.selectActiveByCollegeIds(new ArrayList<>(ctx.collegeIds()));
         int disabled = 0;
@@ -251,7 +275,17 @@ public class ImportRowWriter {
                     .set(UserSemesterProfile::getStatus, 0));
             disabled++;
         }
-        return disabled;
+        return new ScopeFinishResult(disabled, updated, shrinks);
+    }
+
+    /**
+     * 收尾结果。
+     *
+     * @param disabledCount     停用账号数
+     * @param classSizeUpdates  按名单重算的班级数
+     * @param classSizeShrinks  其中人数被下调的班级数（局部名单的信号，需人工确认是否需要修正）
+     */
+    public record ScopeFinishResult(int disabledCount, int classSizeUpdates, int classSizeShrinks) {
     }
 
     // ============ 私有 ============

@@ -268,7 +268,11 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
         assertThatThrownBy(() -> teacherOrderService.review(submitted.getId(),
                 new OrderFormReviewRequest("reject", "重复审核")))
                 .isInstanceOf(BizException.class)
-                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT));
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT))
+                // 文案须如实说明 reviewed 是终态：此前统一回「请刷新后重试」，
+                // 管理员会以为存在并发竞争而反复重试（系统不提供撤销审核，重试不可能成功）
+                .hasMessageContaining("终态")
+                .hasMessageContaining("不能再次审核");
     }
 
     // ============ 学生选购清单（W3） ============
@@ -298,7 +302,11 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
         asTeacher();
         assertThatThrownBy(() -> teacherOrderService.submit(validItems()))
                 .isInstanceOf(BizException.class)
-                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT));
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT))
+                // 文案不得再引导「联系教材室驳回后补正」：reviewed 是终态，审核接口只接受
+                // pending_review，教材室在系统内同样驳不回——那是一条走不通的路径
+                .hasMessageContaining("终态")
+                .hasMessageNotContaining("驳回后补正");
 
         // 驳回路径的 delisted 语义见 studentSubmit_delistedTextbook_returns400
         // （rejected 表单无 reviewed 来源 → 清单标「已下架」）

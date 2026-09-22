@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tian.textbook.common.ApiResponse;
 import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
+import com.tian.textbook.importexport.dto.ExportPlan;
 import com.tian.textbook.importexport.entity.ExportTask;
 import com.tian.textbook.supplier.dto.SupplierCollegeGroup;
 import com.tian.textbook.supplier.dto.SupplierExportRequest;
@@ -56,26 +57,32 @@ public class SupplierController {
 
     /**
      * 导出（一学院一 sheet）：预估行数 ≤ 阈值 → 同步流式下载；> 阈值 → 异步，
-     * 返回 {taskId} 供轮询 GET /api/supplier/export-task/{id}。每次导出写审计。
+     * 返回 {@code {taskId, async:true, rowEstimate}} 供轮询 GET /api/supplier/export-task/{id}。
+     * 每次导出写审计。
      *
-     * <p>先判定导出方式：异步走 JSON 包络；同步先设响应头（头必须在 body 前）再写流。</p>
+     * <p>先判定导出方式：异步走 JSON 包络；同步先设响应头（头必须在 body 前）再写流。
+     * 异步受理体与其余四类导出一致（API.md §3.10/§3.13），前端可按同一套字段分流，
+     * 不必依赖 Content-Type 猜测。</p>
      */
     @PostMapping("/export")
     @PreAuthorize("hasAuthority('supplier:order:export')")
     public void export(@Valid @RequestBody SupplierExportRequest request,
                        HttpServletResponse response) throws IOException {
-        Long taskId = supplierService.planExport(request);
-        if (taskId != null) {
+        ExportPlan plan = supplierService.planExport(request);
+        if (plan.async()) {
             // 异步：轮询 + 一次性 token 下载
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            objectMapper.writeValue(response.getOutputStream(), ApiResponse.ok(Map.of("taskId", taskId)));
+            objectMapper.writeValue(response.getOutputStream(), ApiResponse.ok(Map.of(
+                    "taskId", plan.taskId(),
+                    "async", true,
+                    "rowEstimate", plan.rowEstimate())));
             response.flushBuffer();
             return;
         }
         // 同步流式：头必须在 body 前设置
         response.setContentType(XLSX_CONTENT_TYPE);
         response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-                "attachment; filename=\"supplier-orders.xlsx\"");
+                "attachment; filename=\"" + plan.fileName() + "\"");
         supplierService.writeSync(request, response.getOutputStream());
         response.flushBuffer();
     }

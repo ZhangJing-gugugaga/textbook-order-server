@@ -1,6 +1,9 @@
 package com.tian.textbook.common.error;
 
+import com.fasterxml.jackson.databind.JsonMappingException.Reference;
+import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.tian.textbook.common.ApiResponse;
+import com.tian.textbook.common.util.TimeFormats;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
@@ -69,9 +72,49 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
     }
 
+    /**
+     * 请求体不可解析（JSON 语法错 / 字段类型不匹配）→ 400。
+     *
+     * <p>时间字段单独给出可操作提示：默认文案只有「请求参数有误」，联调时看不出是哪个字段、
+     * 该用什么格式（历史缺陷：body 传 {@code 2026-09-21 09:30:00} 时只回这一句）。
+     * 其余情况维持原样（不透传 Jackson 原始消息，避免泄露类名与内部结构）。</p>
+     */
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ApiResponse<Void>> handleNotReadable(HttpMessageNotReadableException ex) {
+    public ResponseEntity<ApiResponse<List<String>>> handleNotReadable(HttpMessageNotReadableException ex) {
+        InvalidFormatException formatError = findInvalidFormat(ex);
+        if (formatError != null && isTemporal(formatError.getTargetType())) {
+            String field = fieldPath(formatError);
+            String detail = (field.isEmpty() ? "时间" : field) + ": " + TimeFormats.INPUT_HINT;
+            return ResponseEntity.badRequest()
+                    .body(new ApiResponse<>(ErrorCode.PARAM_INVALID.code, "请求参数有误", List.of(detail)));
+        }
         return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
+    }
+
+    /** 取最内层的 {@link InvalidFormatException}（Jackson 会把它包进 JsonMappingException 链）。 */
+    private static InvalidFormatException findInvalidFormat(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof InvalidFormatException ife) {
+                return ife;
+            }
+        }
+        return null;
+    }
+
+    /** 目标类型是否为日期时间（含 JSR-310 与 java.util.Date）。 */
+    private static boolean isTemporal(Class<?> targetType) {
+        return targetType != null
+                && (java.time.temporal.Temporal.class.isAssignableFrom(targetType)
+                || java.util.Date.class.isAssignableFrom(targetType));
+    }
+
+    /** 字段路径（如 {@code windowStart}；嵌套时取最内层字段名）。 */
+    private static String fieldPath(InvalidFormatException ex) {
+        return ex.getPath().stream()
+                .map(Reference::getFieldName)
+                .filter(java.util.Objects::nonNull)
+                .reduce((first, second) -> second)
+                .orElse("");
     }
 
     /**

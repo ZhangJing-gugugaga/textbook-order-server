@@ -178,7 +178,7 @@ public class ImportAsyncService {
         // 停用比对范围（W14）：仅文件内学院 + 角色
         ctx.recordUser(userNo);
         ctx.recordCollege(college.getId());
-        ctx.recordClass(clazz.getId());
+        ctx.recordClass(clazz.getId(), userNo);
         return null;
     }
 
@@ -299,9 +299,9 @@ public class ImportAsyncService {
     private void finalizeBatch(ImportRunContext ctx, ImportRunSummary summary) {
         List<java.util.Map<String, Object>> errors = summary.errors();
         String errorFilePath = errors.isEmpty() ? null : writeErrorFile(ctx.batchId(), errors);
-        int disabledCount = 0;
+        ImportRowWriter.ScopeFinishResult scope = new ImportRowWriter.ScopeFinishResult(0, 0, 0);
         try {
-            disabledCount = rowWriter.finishScope(ctx);
+            scope = rowWriter.finishScope(ctx);
         } catch (Exception e) {
             log.error("导入收尾失败（班级人数/停用比对）: batchId={}", ctx.batchId(), e);
         }
@@ -327,11 +327,15 @@ public class ImportAsyncService {
         detail.put("okCount", summary.okCount());
         detail.put("errorCount", errorCount);
         detail.put("truncatedErrors", summary.truncatedErrors());
-        detail.put("disabledCount", disabledCount);
+        detail.put("disabledCount", scope.disabledCount());
+        // 班级人数按名单重算的规模（W2）：局部名单会把教师数量上限一并改小，摘要留痕便于追溯
+        detail.put("classSizeUpdates", scope.classSizeUpdates());
+        detail.put("classSizeShrinks", scope.classSizeShrinks());
         auditService.record(AuditService.IMPORT, "import_batch", String.valueOf(ctx.batchId()), detail);
-        log.info("导入完成: batchId={}, bizType={}, total={}, ok={}, error={}（截断明细={}）, 停用={}",
+        log.info("导入完成: batchId={}, bizType={}, total={}, ok={}, error={}（截断明细={}）, 停用={}, 班级人数更新={}（下调={}）",
                 ctx.batchId(), ctx.bizType(), summary.total(), summary.okCount(), errorCount,
-                summary.truncatedErrors(), disabledCount);
+                summary.truncatedErrors(), scope.disabledCount(), scope.classSizeUpdates(),
+                scope.classSizeShrinks());
     }
 
     private void markFailed(Long batchId, Exception e) {

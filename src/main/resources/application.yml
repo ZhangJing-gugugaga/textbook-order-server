@@ -7,6 +7,8 @@ spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:}
   # JSON 序列化：时间统一 Asia/Shanghai
+  # 注意：date-format 只作用于 java.util.Date，**不影响** JSR-310（LocalDateTime 出参恒为
+  # ISO-8601，入参的宽容解析见 TimeFormatConfig / TimeFormats），不要以为改这里能改接口时间口径。
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
@@ -28,10 +30,10 @@ spring:
   sql:
     init:
       mode: never
-  mvc:
-    # 文件上传上限（import.max_file_mb 配置项另做业务校验）
-    format:
-      date-time: yyyy-MM-dd HH:mm:ss
+  # 刻意不配 spring.mvc.format.date-time：它只覆盖 MVC 参数绑定（body 不受影响），
+  # 会让 query 与 body 的时间口径分叉。时间入参统一由 TimeFormatConfig 的转换器接管
+  # （ISO-8601 与 yyyy-MM-dd HH:mm:ss 都接受，出参恒为 ISO-8601）。
+  # 文件上传上限由 UploadConfig 程序化配置（容器 100MB 兜底 + import.max_file_mb 业务校验）。
   # 优雅停机：停止接收新请求后，等待在途请求与异步任务收尾的宽限期
   lifecycle:
     timeout-per-shutdown-phase: 30s
