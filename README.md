@@ -32,6 +32,17 @@ java -jar target/textbook-order-server.jar --spring.profiles.active=trial
 生产环境 DB 初始化由 DBA 手动执行 `src/main/resources/db/` 下的 `schema.sql` + `data-permission.sql`
 （**不执行** `data-seed.sql`，它含已知口令的测试账号；部署手册交付物）。
 
+### 本地开发环境（Windows）
+
+本机已备好**免安装 MySQL 8.0.29**（无需管理员权限，数据在 E: 盘）：
+
+```bat
+E:	ools\mysql-local.bat start      :: 启动（stop / status / client / logs）
+```
+
+然后 `set -a; . ./.env.local; set +a` 并启动应用即可（`local` profile 自动建库 + 灌种子，
+脚本已幂等，可反复重启）。详见 [docs/deployment.md §5.1](docs/deployment.md)。
+
 ### 启动自检（fail-fast）
 
 服务在启动期断言必填配置，不满足即中止（详见 [docs/deployment.md §3.1](docs/deployment.md)）：

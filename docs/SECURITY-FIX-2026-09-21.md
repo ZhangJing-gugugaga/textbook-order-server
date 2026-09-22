@@ -142,6 +142,59 @@ throw new BizException(ErrorCode.LOGIN_FAILED);
 - 安全加固：弱口令黑名单 + 禁「与学号/工号（含后 6 位）相同」；`MustChangePasswordFilter` 白名单由前缀通配收敛为显式枚举（`switch-role` 不再放行）；下载校验 `expires_at`；`/api/export-task/{id}` 归属失败统一 404；种子 18 个账号改为各自独立 BCrypt salt；建号手机号按号段校验。
 - 文档：README（快速开始/环境变量表/启动自检/测试规模）、API.md（首登白名单、通知 target_roles、导出任务与批次归属、405/415 错误码）、docs/deployment.md（必填项与启动自检表、systemd 模板、运维要点、移交检查单）。
 
+## 4.1 真实 MySQL 实测（2026-09-22 补充）
+
+首轮修复时本机无 MySQL/Docker，迁移脚本只做了 H2 层面的语句校验。本次在
+**真实 MySQL 8.0.29** 上完成了端到端验证，并因此发现并修掉 3 个问题：
+
+### 迁移脚本实测（R2 的决定性验证）
+
+```
+修复前 schema + 权限种子 + 18 账号种子  →  执行 migration-2026-09-21.sql  →  再执行一次
+```
+
+| 检查项 | 结果 |
+|--------|------|
+| 不跑迁移直接部署新代码 | 复现 `ERROR 1054 Unknown column 'content_version'`（正是 R2 预测的 500） |
+| 迁移脚本执行 | 退出码 0，无报错 |
+| 幂等性（重复执行） | 退出码 0，无报错、不重复改对象 |
+| **迁移后库 vs 全新安装库** | **列定义 314/314 零差异、索引 127/127 零差异** |
+| 存量数据完好 | 18 账号 / 37 权限 / 50 角色-权限映射 / `rejected_auto` 待回填 0 行 |
+
+### 实测发现并修掉的 3 个问题
+
+1. **迁移脚本未覆盖 DATETIME 精度**：原把 `DATETIME → DATETIME(3)` 列为「可选」，
+   导致迁移库与全新安装库在 59 个时间列上结构不一致。已改为过程内游标动态转换
+   （只处理 `DATETIME_PRECISION = 0`，幂等），并补上 2 个冗余索引的清理
+   （`course.idx_course_sem`、`teacher_course.idx_tc_teacher`），使两边结构完全收敛。
+2. **`schema.sql` 自身有两列漏改**：`sys_user.lock_until`（多空格）与
+   `sys_user_token.expire_at`（无 DEFAULT 子句）在首轮的批量替换中未被命中，仍是秒精度。
+   已修正——这是「迁移结果与全新安装不一致」暴露出来的真实缺陷。
+3. **种子脚本非幂等**（审查报告 P2 只修了一半）：`schema.sql` 已改 `IF NOT EXISTS`，
+   但 `data-permission.sql` / `data-seed.sql` 仍是裸 INSERT，配合 `local` profile 的
+   `mode: always` + `continue-on-error: false`，**二次启动必然因 Duplicate entry 启动失败**。
+   已给 18 条 INSERT 追加 `ON DUPLICATE KEY UPDATE <table>.id = <table>.id`
+   （限定表名，否则 `INSERT ... SELECT` 会报 1050/1052 歧义），实测连续 3 次执行无报错、数据无重复。
+
+### 应用层实测（真实 HTTP + 真实库）
+
+| 验证项 | 结果 |
+|--------|------|
+| `local` profile 首次启动（自动建库+种子） | 启动自检通过、Tomcat 8080、13.3s |
+| 二次启动（库与种子已存在） | **启动成功、种子无重复**（修复 #3 后） |
+| 登录 `900001/Admin@123` | `code=0`，`currentRole=ADMIN` |
+| `/api/me`、`/api/semester/window/status`、`/api/admin/dashboard` | 均 `code=0`，数据正确 |
+| `/actuator/health` | `{"status":"UP","groups":["liveness","readiness"]}` |
+| **R1 失败计数与锁定** | 连续 5 次错误口令：`fail_count` 1→4，第 5 次置 `lock_until`；第 6 次返回 `ACCOUNT_LOCKED`；**锁定期间正确口令也被拒**；解锁后正确登录 `fail_count` 清零 |
+| S18 异常处理 | 未知路径 401；`GET /api/auth/login` → **405 且 `Allow: POST`**；`text/plain` → 415；`?page=abc` → 400 且 data 指明字段 |
+| R5 分页上限 | `?page=9223372036854775807` → **200**（修复前会因 offset 溢出报 SQL 错误 → 500） |
+| F3 供货商越权 | 读内部导出任务 → `NOT_FOUND`（统一 404 防枚举）；访问教师接口 → `FORBIDDEN` |
+| S24 CORS | 带 `Origin: https://evil.example` 请求 → **无 CORS 响应头**（未配置白名单时不放行） |
+
+> 环境说明：MySQL 为免安装 ZIP 版（8.0.29，跑在用户进程下，数据目录在 E: 盘），
+> 原因见 docs/deployment.md §5.1。Docker 未安装（需管理员权限 + WSL2 + 重启），
+> 故 Testcontainers 的 3 个用例仍跳过。
+
 ## 5. 验证方式
 
 - `./mvnw test`：**208 用例通过 / 3 跳过**（Testcontainers 需 Docker）。

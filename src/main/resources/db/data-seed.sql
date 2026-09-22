@@ -19,7 +19,8 @@ SET NAMES utf8mb4;
 -- ============ 组织三表 ============
 INSERT INTO college (name, full_name) VALUES
 ('计算机学院', '计算机学院'),
-('外国语学院', '外国语学院');
+('外国语学院', '外国语学院')
+ON DUPLICATE KEY UPDATE college.id = college.id;
 
 INSERT INTO major (college_id, name, full_name)
 SELECT c.id, m.name, m.full_name FROM college c
@@ -27,7 +28,8 @@ JOIN (SELECT '计算机学院' AS college, '软件工程' AS name, '软件工程
       UNION ALL SELECT '计算机学院', '网络工程', '网络工程专业'
       UNION ALL SELECT '外国语学院', '英语', '英语专业'
       UNION ALL SELECT '外国语学院', '日语', '日语专业') m
-  ON m.college = c.name;
+  ON m.college = c.name
+ON DUPLICATE KEY UPDATE major.id = major.id;
 
 INSERT INTO school_class (major_id, name, grade, student_count)
 SELECT m.id, k.name, '2023', k.student_count FROM major m
@@ -35,7 +37,8 @@ JOIN (SELECT '软件工程' AS major, '软工2023-1' AS name, 50 AS student_coun
       UNION ALL SELECT '软件工程', '软工2023-2', 48
       UNION ALL SELECT '英语', '英语2023-1', 45
       UNION ALL SELECT '日语', '日语2023-1', 40) k
-  ON k.major = m.name;
+  ON k.major = m.name
+ON DUPLICATE KEY UPDATE school_class.id = school_class.id;
 
 -- ============ 学期（active 窗口开放中 + draft） ============
 INSERT INTO semester (name, start_date, end_date, window_start, window_end,
@@ -44,7 +47,8 @@ VALUES
 ('2026-2027学年秋季学期', '2026-09-01', '2027-01-15',
  '2026-09-14 00:00:00', '2026-10-31 23:59:59', 1, 1, 1, 'open', 'active', 0),
 ('2026-2027学年春季学期', '2027-02-20', '2027-07-10',
- '2027-03-01 00:00:00', '2027-06-20 23:59:59', 0, 1, 1, 'not_open', 'draft', 0);
+ '2027-03-01 00:00:00', '2027-06-20 23:59:59', 0, 1, 1, 'not_open', 'draft', 0)
+ON DUPLICATE KEY UPDATE semester.id = semester.id;
 
 -- ============ 系统配置 8 键（M1 冻结，03 §10.1） ============
 INSERT INTO system_config (config_key, config_value, remark) VALUES
@@ -55,7 +59,8 @@ INSERT INTO system_config (config_key, config_value, remark) VALUES
 ('order.correct_window_days', '7', '关窗后补正窗口天数（W4）'),
 ('export.sync_row_threshold', '5000', '导出同步/异步阈值（Q16）'),
 ('export.download_token_minutes', '10', '一次性下载 token 有效期'),
-('import.max_file_mb', '10', '上传文件大小上限');
+('import.max_file_mb', '10', '上传文件大小上限')
+ON DUPLICATE KEY UPDATE system_config.id = system_config.id;
 
 -- ============ 账号（BCrypt strength 10） ============
 INSERT INTO sys_user (user_no, name, password_hash, phone, college_id, class_id,
@@ -82,7 +87,8 @@ INSERT INTO sys_user (user_no, name, password_hash, phone, college_id, class_id,
 -- SUPPLIER
 ('600001', '供货商甲', '$2a$10$tIPuCasNS75zg12R9MIH/eMCvlGl1BAPLy5msUNWzl3yBmXrzW0Ci', '13500000001', NULL, NULL, 1, 0, 1, 0, 1),
 ('600002', '供货商乙', '$2a$10$zjrSEOTMmHXMeFfB7.Jjr.57jPJfd/Ihp49u.k8BYbfowr4W/gFfG', '13500000002', NULL, NULL, 0, 1, 0, 0, 1),
-('600003', '供货商丙', '$2a$10$luufjRLdB1tOyIBiUGNuAemKl9l6DEpa386diHp1NE2.Vm9UvLeeO', '13500000003', NULL, NULL, 1, 1, 0, 0, 1);
+('600003', '供货商丙', '$2a$10$luufjRLdB1tOyIBiUGNuAemKl9l6DEpa386diHp1NE2.Vm9UvLeeO', '13500000003', NULL, NULL, 1, 1, 0, 0, 1)
+ON DUPLICATE KEY UPDATE sys_user.id = sys_user.id;
 
 -- ============ 用户-角色绑定 ============
 INSERT INTO sys_user_role (user_id, role_id)
@@ -107,21 +113,24 @@ FROM (SELECT '900001' AS user_no, 'ADMIN' AS role_code
       UNION ALL SELECT '600002', 'SUPPLIER'
       UNION ALL SELECT '600003', 'SUPPLIER') pairs
 JOIN sys_user u ON u.user_no = pairs.user_no
-JOIN sys_role r ON r.role_code = pairs.role_code;
+JOIN sys_role r ON r.role_code = pairs.role_code
+ON DUPLICATE KEY UPDATE sys_user_role.id = sys_user_role.id;
 
 -- ============ 按学期归属（active 学期，真源 W6） ============
 INSERT INTO user_semester_profile (user_id, semester_id, college_id, class_id, status)
 SELECT u.id, s.id, u.college_id, u.class_id, 1
 FROM sys_user u JOIN semester s ON s.active_status = 'active'
 WHERE u.user_no IN ('800101','800102','800103','700101','700102','700103','700201','700202',
-                    '20230101','20230102','20230103','20230201');
+                    '20230101','20230102','20230103','20230201')
+ON DUPLICATE KEY UPDATE user_semester_profile.id = user_semester_profile.id;
 
 -- ============ 教材库（跨学期共用） ============
 INSERT INTO textbook (isbn, title, edition, author, press, price, status) VALUES
 ('9787302517993', '数据结构（C语言版）', '第2版', '严蔚敏', '清华大学出版社', 49.00, 1),
 ('9787111421641', '计算机网络', '第7版', '谢希仁', '电子工业出版社', 59.00, 1),
 ('9787040418248', '大学英语综合教程', '第3版', '季佩英', '高等教育出版社', 45.00, 1),
-('9787040509762', '新编日语教程', '第4版', '周平', '华东师范大学出版社', 42.00, 1);
+('9787040509762', '新编日语教程', '第4版', '周平', '华东师范大学出版社', 42.00, 1)
+ON DUPLICATE KEY UPDATE textbook.id = textbook.id;
 
 -- ============ 课程（active 学期） ============
 INSERT INTO course (semester_id, code, name)
@@ -130,7 +139,8 @@ JOIN (SELECT 'CS101' AS code, '数据结构' AS name
       UNION ALL SELECT 'CS102', '计算机网络'
       UNION ALL SELECT 'EN201', '大学英语'
       UNION ALL SELECT 'JP202', '日语视听说') c
-WHERE s.active_status = 'active';
+WHERE s.active_status = 'active'
+ON DUPLICATE KEY UPDATE course.id = course.id;
 
 -- ============ 任课关系（W17：征订范围即此表） ============
 INSERT INTO teacher_course (semester_id, teacher_id, course_id, class_id)
@@ -142,4 +152,5 @@ JOIN school_class k ON k.name IN ('软工2023-1','软工2023-2','英语2023-1')
 WHERE s.active_status = 'active'
   AND ((u.user_no='700101' AND c.code='CS101' AND k.name='软工2023-1')
     OR (u.user_no='700102' AND c.code='CS102' AND k.name='软工2023-2')
-    OR (u.user_no='700201' AND c.code='EN201' AND k.name='英语2023-1'));
+    OR (u.user_no='700201' AND c.code='EN201' AND k.name='英语2023-1'))
+ON DUPLICATE KEY UPDATE teacher_course.id = teacher_course.id;

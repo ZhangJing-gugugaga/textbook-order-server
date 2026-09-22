@@ -139,6 +139,40 @@ server {
 }
 ```
 
+## 5.1 本地开发环境（Windows · 免安装 MySQL，无需管理员）
+
+本仓库在 Windows 上准备了一套**免安装**的本地 MySQL，用于真实库联调与迁移脚本验证
+（H2 全绿不等于生产可用）：
+
+| 项 | 位置 |
+|----|------|
+| MySQL 8.0.29 便携版 | `E:	ools\mysql\mysql-8.0.29-winx64` |
+| 数据目录 / 配置 | `E:	ools\mysql\data`、`E:	ools\mysql\my.ini` |
+| 控制脚本 | `E:	ools\mysql-local.bat`（start / stop / status / client / logs） |
+| 连接 | `127.0.0.1:3306`，`root` / `root`，字符集 utf8mb4，时区 +08:00 |
+
+```bat
+E:	ools\mysql-local.bat start     :: 启动（用户进程，非 Windows 服务）
+E:	ools\mysql-local.bat status
+E:	ools\mysql-local.bat client    :: 进入 mysql 命令行
+E:	ools\mysql-local.bat stop
+```
+
+启动应用（`local` profile 会自动建库 + 灌权限种子 + 演示账号）：
+
+```bash
+set -a; . ./.env.local; set +a        # 仓库根目录的本地环境变量（.gitignore 已忽略 .env.*）
+./mvnw spring-boot:run
+# 或 java -jar target/textbook-order-server.jar
+```
+
+> `.env.local` 已生成，含 `DB_URL` / `DB_PASSWORD=root` / `JWT_SECRET` / 导出与日志目录
+> （均指向 E: 盘，因为本机 C: 盘空间紧张）。
+>
+> 注意：`local` profile 的 `sql.init` 为 `always`，会重复执行 `schema.sql` 与两个种子脚本；
+> 三者均已幂等（`CREATE TABLE IF NOT EXISTS` + `ON DUPLICATE KEY UPDATE`），可反复重启。
+> 生产/试运行**不要**用 `local` profile（见 §3.1）。
+
 ## 6. 备份（每日 02:00 全量，保留 14 天，W22）
 
 `/opt/textbook/backup.sh`：
