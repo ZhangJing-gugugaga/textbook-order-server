@@ -118,6 +118,11 @@ textbook:
     allowed-origins: ${TEXTBOOK_CORS_ORIGINS:}
   import:
     max-file-mb: 10          # 上传上限（与 system_config.import.max_file_mb 对应）
+    # 局部名单防护（B13）：学生名单导入按文件内人数重算班级人数（= 教师填报数量上限），
+    # 下调比例超过 20% 且不少于 5 人时视为疑似局部名单，导入必须带 confirmClassSizeShrink=true，
+    # 否则 409 并回显逐班 diff（POST /api/admin/user/import/preview 可先预览）。
+    class-size-shrink-confirm-pct: ${TEXTBOOK_IMPORT_CLASS_SIZE_SHRINK_CONFIRM_PCT:20}
+    class-size-shrink-confirm-min-drop: ${TEXTBOOK_IMPORT_CLASS_SIZE_SHRINK_MIN_DROP:5}
     pool:
       core-size: 2           # 专用线程池：核心 2 / 最大 4 / 队列 50
       max-size: 4

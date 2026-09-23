@@ -30,6 +30,10 @@ public final class TimeFormats {
     public static final String INPUT_HINT =
             "时间格式应为 ISO-8601（2026-09-21T09:30:00）或 yyyy-MM-dd HH:mm:ss";
 
+    /** 纯日期字段（LocalDate）解析失败时的提示。 */
+    public static final String DATE_HINT =
+            "日期格式应为 yyyy-MM-dd（2026-09-21）";
+
     /** 空格分隔（历史文档口径） */
     private static final DateTimeFormatter SPACE_SECOND = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     /** 容忍缺秒 */
@@ -62,6 +66,33 @@ public final class TimeFormats {
             }
         }
         throw new DateTimeParseException(INPUT_HINT, value, 0);
+    }
+
+    /**
+     * 解析入参日期（LocalDate 字段，如学期 startDate/endDate）。
+     *
+     * <p>口径与 {@link #parseInput} 一致：{@code yyyy-MM-dd} 为主，同时容忍带时间的写法
+     * （ISO 或空格分隔，取日期部分）——同一个字段在不同调用方手里可能被格式化成
+     * {@code 2026-09-01} 或 {@code 2026-09-01 00:00:00}，只为「多打了时间」就回 400
+     * 属于把实现细节当契约（B12 的同类问题：时间入参口径必须在所有接口间一致）。</p>
+     *
+     * @throws DateTimeParseException 日期部分都无法解析时抛出（调用方转 400）
+     */
+    public static LocalDate parseInputDate(String text) {
+        String value = text == null ? "" : text.trim();
+        if (value.isEmpty()) {
+            throw new DateTimeParseException("日期为空", value, 0);
+        }
+        try {
+            return LocalDate.parse(value, DATE_ONLY);
+        } catch (DateTimeParseException ignored) {
+            // 非纯日期：尝试按日期时间解析后取日期部分
+        }
+        try {
+            return parseInput(value).toLocalDate();
+        } catch (DateTimeParseException e) {
+            throw new DateTimeParseException(DATE_HINT, value, 0);
+        }
     }
 
     /** 是否纯日期（{@code yyyy-MM-dd}，不含时间部分）。 */

@@ -99,17 +99,18 @@ E:	ools\mysql-local.bat start      :: 启动（stop / status / client / logs）
 ## 测试
 
 ```bash
-./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检（238 用例）
-./mvnw test -Dmysql.local.enabled=true   # 追加本地 MySQL 真库用例（共 241 用例，需先起 E:	ools\mysql-local.bat）
+./mvnw test                # 单元 + 切片（越权矩阵/401语义/首登拦截）+ H2 集成 + ArchUnit 机检（248 用例）
+./mvnw test -Dmysql.local.enabled=true   # 追加本地 MySQL 真库用例（共 257 用例，需先起 E:\tools\mysql-local.bat）
 bash scripts/smoke-isolated.sh            # 端到端冒烟：一次性库 + 独立端口，可重复执行（45 项断言）
+bash scripts/verify-report-2026-09-23.sh  # 生产测试报告失败项回归：B10/B11/B12/B13/B15 + 种子账号清理脚本（60 项断言）
 ./mvnw test -Drun.mysql.tests=true   # Docker 可用时追加 Testcontainers(MySQL) 集成用例
 ```
 
 - 单元（65 例）：字段审查 6 规则 × 边界（含数量上限回退、ISBN 校验位）、导出阈值、配置白名单、窗口状态机、数据隔离条件构建（多角色 OR 并集 + fail-closed 默认拒绝）、JWT 密钥强度自检、客户端 IP 可信代理解析、LIKE 通配符转义
 - 切片（30 例）：5 角色 × 资源 × 操作越权矩阵（100% 拒绝 + 审计）、401 三类语义、must_change_password 拦截、多角色并集、联调新增端点权限
-- 集成（92 例，H2 MySQL 模式）：双缓冲原子切换（含 version 冲突回滚）、窗口自动开关幂等、导入批次与停用比对、**真实 HTTP multipart 上传**（相对 tmp-dir 落盘回归防护）、重提覆盖、confirm 幂等、一次性 token 410、JSON 列读回（submit_snapshot / detail_json）、**越权修复回归**（供货商导出 IDOR / 秘书跨院导出 / 异动跨学期审批 / 通知 target_roles 定向 / 异动目标范围）
+- 集成（99 例，H2 MySQL 模式）：双缓冲原子切换（含 version 冲突回滚）、**归档二次门禁**（空 body 拒绝 / 窗口进行中需显式确认 / 撤销归档受限回滚）、窗口自动开关幂等、导入批次与停用比对、**局部名单门禁与导入预览**（班级人数下调超阈值 409 + 只读 diff）、**真实 HTTP multipart 上传**（相对 tmp-dir 落盘回归防护）、重提覆盖、confirm 幂等、一次性 token 410、JSON 列读回（submit_snapshot / detail_json）、**越权修复回归**（供货商导出 IDOR / 秘书跨院导出 / 异动跨学期审批 / 通知 target_roles 定向 / 异动目标范围）
 - 机检（7 例）：ArchUnit + 数据隔离护栏 —— supplier 包禁 import 学生/教师 Mapper、common 包禁 import 业务 Mapper、Controller 禁直连 Mapper、按用户维度的 Mapper 方法必须声明隔离口径
-- 性能（默认禁用）：1 万行导入样本实测 169s（≤5 分钟，W22）
+- 性能（默认禁用）：1 万行导入样本实测 254s（含局部名单门禁扫描；≤5 分钟，W22）
 
 ## 工程结构（SPEC §2）
 

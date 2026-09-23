@@ -253,11 +253,16 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
-          <!-- -Djava.io.tmpdir 指向项目 target/tmp：测试 JVM 的临时文件（Mockito 引导 jar、
+          <!-- -Djava.io.tmpdir 指向项目 target/：测试 JVM 的临时文件（Mockito 引导 jar、
                Tomcat 临时目录、导入导出中间文件等，单轮约 13~26MB）默认写在
                C:\Users\<user>\AppData\Local\Temp，长期累积会挤占系统盘。
-               落到 target/ 下既随 clean 一并清理，也不占用系统盘。 -->
-          <argLine>-Duser.timezone=Asia/Shanghai -Djava.io.tmpdir=${project.build.directory}/tmp</argLine>
+               落到 target/ 下既随 clean 一并清理，也不占用系统盘。
+               注意必须用 target/ 本身而不是 target/tmp：java.io.tmpdir 指向不存在的目录时
+               Mockito 无法释放/加载 inline mock maker（报「Could not initialize plugin:
+               interface org.mockito.plugins.MockMaker」），而 surefire 不会替我们建目录——
+               `mvn clean test` 会因此整批失败（实测 248 用例中 195 个报该错）。
+               target/ 在测试阶段必然存在（compile 已创建），无需额外建目录步骤。 -->
+          <argLine>-Duser.timezone=Asia/Shanghai -Djava.io.tmpdir=${project.build.directory}</argLine>
           <systemPropertyVariables>
             <!-- 本地真实 MySQL 集成测试（无需 Docker）：见 LocalMySqlIntegrationTest -->
             <mysql.local.enabled>${mysql.local.enabled}</mysql.local.enabled>

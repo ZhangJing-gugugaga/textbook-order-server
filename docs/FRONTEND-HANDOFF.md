@@ -118,20 +118,51 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
 
 | 位置 | 接受 |
 |------|------|
-| body（如窗口设置 `windowStart/windowEnd`） | `2026-09-21T09:30:00`、`2026-09-21 09:30:00`、缺秒 `09:30` |
+| body（如窗口设置 `windowStart/windowEnd`、`PUT /api/admin/semester/{id}`） | `2026-09-21T09:30:00`、`2026-09-21 09:30:00`、缺秒 `09:30` |
+| body 日期字段（`LocalDate`，如学期 `startDate/endDate`） | `2026-09-01`；带时间也接受（取日期部分，`2026-09-01 00:00:00` ≡ `2026-09-01`） |
 | query（如审计 `startAt/endAt`） | 同上，另接受纯日期 `2026-09-21`（`startAt` 取当日 00:00:00、`endAt` 取当日 23:59:59.999999999） |
 | 出参 | 恒为 ISO-8601（`2026-09-21T09:30:00`），与入参格式无关 |
 
 格式确实非法时返回 400 `PARAM_INVALID`，`data` 会指明字段与可接受格式：
 `["windowStart: 时间格式应为 ISO-8601（2026-09-21T09:30:00）或 yyyy-MM-dd HH:mm:ss"]`。
 
-### A8. 学期切换/归档不可逆（确认弹窗必须写明）
+> **2026-09-23 更正（生产实测 B12）**：前端 `src/api/semester.ts` 与 `src/utils/format.ts` 的注释写
+> 「JSON body 只认 ISO、query 只认空格」——那是 `TimeFormatConfig` 上线前的旧行为，已被实测推翻：
+> `PUT /api/admin/semester/{id}` 传空格格式返回 200 并真实写库。前端继续用 `toWireDateTime` 转 ISO
+> 没有问题（两种都接受），但**不要再按「格式不对称」设计**：新接口不必为 body/query 分别做格式转换，
+> 非法格式统一为 400 + 逐字段提示。
+
+### A8. 学期切换/归档不可逆，且归档有二次门禁
 
 `POST /api/admin/semester/{id}/activate` 会归档旧 active 学期，`POST /{id}/archive` 会把当前学期置为只读，
-**两者都没有回退接口**：`archived` 学期不能再激活（返回 409「归档不可逆」），也没有 active→draft 的路径。
+**归档不可逆**：`archived` 学期不能再激活（返回 409），也没有 active→draft 的路径。唯一的回退是
+`POST /{id}/unarchive`（受限回滚，见下），且要求当前没有 active 学期（即业务已停摆）。
 
-前端确认弹窗请写明"**此操作不可撤销**"（现有文案只说了"同一时刻仅有一个 active 学期""归档后不可再填报"）。
-另外：**不要拿真实学期的 activate/archive 做冒烟验证**，归档后只能由 DBA 改库恢复。
+**归档必须带确认参数（2026-09-23 新增，生产事故修复）**：
+
+```jsonc
+// POST /api/admin/semester/{id}/archive
+{ "version": 3, "confirmWindowOpen": true }
+// version 必填（取列表/详情返回的 version 原样回传，不匹配 → 409）
+// 窗口进行中（windowStatus=open 或 channelOpen=1）时 confirmWindowOpen 必须为 true，否则 409：
+//   「该学期征订窗口仍在进行中（…）：归档会立即停止全站征订业务…，请先关闭窗口再归档，
+//     或在前端强确认后带 confirmWindowOpen=true 重新提交」
+```
+
+前端确认弹窗请写明"**此操作不可撤销**"，并在 409 时用后端 message 做二次确认（不要自行拼文案）：
+窗口进行中的归档一旦执行，全站接口都会报「当前没有激活学期，请先创建并激活学期」。
+
+**误归档回滚**（新增端点，2026-09-23）：
+
+```jsonc
+// POST /api/admin/semester/{id}/unarchive
+{ "version": 4, "confirm": true }   // 两者都必填
+// 仅当当前无任何 active 学期时可回滚（否则 409「当前已有激活学期…请先归档它」）
+// 回滚只恢复 activeStatus=active；窗口保持 closed，需管理员手动重新开启（不自动恢复填报通道）
+```
+
+> **不要拿真实学期的 activate/archive 做冒烟验证**，归档后业务会停摆（虽然现在有 unarchive 可救，
+> 但仍应使用可重建库的环境，如 `scripts/e2e-smoke.sh`）。
 
 ### A9. 两类协议错误码
 
@@ -207,7 +238,7 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
 | 导入错误明细保留期 | 文件保留 24 小时后清理，之后下载 404；文案会区分"该批次没有错误明细"与"错误明细文件已过期清理（保留 24 小时）" |
 | 供货商清单行数上限 | `GET /api/supplier/orders` 上限 20000 行（超出截断并记日志），超出场景请用导出 |
 | 供货商历史批次 | 升级前的历史导入批次 `created_by` 为 NULL，对非 ADMIN 按 404 处理（有意的 fail-closed 选择） |
-| 班级人数以名单为准 | 学生名单导入会把 `school_class.studentCount` 重算为**文件内该班去重学生数**（教师征订数量上限的来源）。**局部名单会把上限改小**（只放 1 行 → 上限变 1，教师提交会被 `QTY_RANGE` 拦住）。导入摘要的 `classSizeShrinks` 与 WARN 日志会记录下调；需修正时用 `PUT /api/admin/class/{id}` |
+| 班级人数以名单为准 + 局部名单门禁 | 学生名单导入会把 `school_class.studentCount` 重算为**文件内该班去重学生数**（教师征订数量上限的来源）。**局部名单会把上限改小**（只放 2 行 → 上限变 2，教师提交会被 `QTY_RANGE` 拦住）。2026-09-23 起下调幅度**比例 > 20% 且 ≥ 5 人**时导入直接 **409 `STATE_CONFLICT`**（不建批次、不改人数），message 含逐班 diff（如「软工2023-1（计算机学院/软件工程）50 → 2（-48，96%）」），须带 `confirmClassSizeShrink=true` 重提；也可先调 `POST /api/admin/user/import/preview`（只读，不落库）拿 `classSizeDiffs[]`/`newUserCount`/`disableEstimate` 做确认弹窗。导入摘要的 `classSizeUpdates`/`classSizeShrinks`/`classSizeShrinkConfirmed` 与 WARN 日志会记录下调与确认情况；需修正时用 `PUT /api/admin/class/{id}` |
 | 微信订阅消息 | 未配置模板 id 时 `notice_record` 如实记 `unauthorized`；弹窗通道不受影响 |
 | 联调夹具无法用接口清理 | 联调产生的 `[IT]` 前缀学院/专业/班级/课程/教材/账号没有删除接口（组织三表与教材为严格模式，防误删），只能由 DBA 按前缀清理；每轮联调还会新建 1 个 draft 夹具学期 |
 

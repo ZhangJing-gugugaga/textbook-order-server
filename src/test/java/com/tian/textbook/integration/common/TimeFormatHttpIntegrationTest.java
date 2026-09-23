@@ -98,6 +98,44 @@ class TimeFormatHttpIntegrationTest {
     }
 
     @Test
+    @DisplayName("B12：PUT /admin/semester/{id} 与窗口接口同口径——body 空格与 ISO 都接受，出参恒为 ISO")
+    void updateSemester_acceptsBothBodyFormats() {
+        Semester semester = seeder.semester("2026-2027-编辑时间格式", LocalDate.of(2026, 9, 1),
+                LocalDate.of(2027, 1, 15), LocalDateTime.now().minusDays(1),
+                LocalDateTime.now().plusDays(7), 1, 1);
+        String token = adminToken();
+
+        // 线上实测（后端测试报告 B12）：本接口接受空格格式并真实写库。开发团队联调报告记的
+        // 「body 空格格式一律 400」是 TimeFormatConfig 上线前的旧行为——两个接口口径不一致的
+        // 观感来自文档过期，而非实现分叉。此处把「两侧同口径」锁定为契约。
+        ResponseEntity<Map<String, Object>> space = putSemester(semester.getId(), token,
+                "{\"windowStart\":\"2026-10-01 00:00:00\",\"windowEnd\":\"2026-10-31 23:59:59\"}");
+        assertThat(space.getStatusCode()).as("空格格式应与窗口接口一致被接受：%s", body(space))
+                .isEqualTo(HttpStatus.OK);
+        assertThat(data(space).get("windowStart")).isEqualTo("2026-10-01T00:00:00");
+
+        // ISO-8601（前端实际发送形态）同样接受，出参不因入参格式而变
+        ResponseEntity<Map<String, Object>> iso = putSemester(semester.getId(), token,
+                "{\"windowStart\":\"2026-10-02T08:00:00\",\"windowEnd\":\"2026-11-01T23:59:59\"}");
+        assertThat(iso.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(data(iso).get("windowStart")).isEqualTo("2026-10-02T08:00:00");
+
+        // LocalDate 字段（startDate/endDate）同口径：纯日期与「多打了时间」的写法都接受
+        ResponseEntity<Map<String, Object>> dates = putSemester(semester.getId(), token,
+                "{\"startDate\":\"2026-09-02 00:00:00\",\"endDate\":\"2027-01-16\"}");
+        assertThat(dates.getStatusCode()).as("日期字段应容忍带时间写法：%s", body(dates))
+                .isEqualTo(HttpStatus.OK);
+        assertThat(data(dates).get("startDate")).isEqualTo("2026-09-02");
+        assertThat(data(dates).get("endDate")).isEqualTo("2027-01-16");
+
+        // 真正的非法值仍然 400，且提示指明日期格式（宽容不等于放过错误输入）
+        ResponseEntity<Map<String, Object>> bad = putSemester(semester.getId(), token,
+                "{\"startDate\":\"2026/09/02\"}");
+        assertThat(bad.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(String.valueOf(body(bad).get("data"))).contains("startDate").contains("yyyy-MM-dd");
+    }
+
+    @Test
     @DisplayName("query 时间入参：审计查询接受 ISO-8601，且纯日期 endAt 含当天整天")
     void auditQuery_acceptsIsoAndDateOnlyEndOfDay() {
         SysUser admin = seeder.user("ADMTF", "超管", "13800000011", null, null, 1, 0, 1, "ADMIN");
@@ -139,6 +177,16 @@ class TimeFormatHttpIntegrationTest {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(token);
         return restTemplate.exchange("/api/admin/semester/" + semesterId + "/window", HttpMethod.PUT,
+                new HttpEntity<>(body, headers), new ParameterizedTypeReference<>() {
+                });
+    }
+
+    /** 编辑学期基本信息（B12：与窗口接口同口径的时间入参）。 */
+    private ResponseEntity<Map<String, Object>> putSemester(Long semesterId, String token, String body) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(token);
+        return restTemplate.exchange("/api/admin/semester/" + semesterId, HttpMethod.PUT,
                 new HttpEntity<>(body, headers), new ParameterizedTypeReference<>() {
                 });
     }

@@ -125,6 +125,12 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
     }
 
     private void updateProgress() {
+        if (ctx.batchId() == null) {
+            // 只读扫描（导入预览 / 局部名单门禁）没有批次行：跳过进度写。
+            // 必须显式跳过——MyBatis-Plus 的 update(wrapper.eq(id, null)) 会退化成不带 where 的
+            // 全表更新，把 import_batch 所有批次的进度一起改掉。
+            return;
+        }
         // total 未知：按已处理行数线性估计（每 100 行 1%，封顶 99%，完成时置 100）
         int pct = Math.min(99, dataRows / 100);
         batchMapper.update(null, Wrappers.<ImportBatch>lambdaUpdate()

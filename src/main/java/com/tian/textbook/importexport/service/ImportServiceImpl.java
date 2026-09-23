@@ -9,6 +9,7 @@ import com.tian.textbook.common.semester.SemesterContextHolder;
 import com.tian.textbook.common.SecurityUtils;
 import com.tian.textbook.common.util.FailureMessages;
 import com.tian.textbook.importexport.ImportService;
+import com.tian.textbook.importexport.dto.ImportPreviewResponse;
 import com.tian.textbook.importexport.entity.ImportBatch;
 import com.tian.textbook.importexport.mapper.ImportBatchMapper;
 import com.tian.textbook.importexport.support.ImportUploadValidator;
@@ -45,13 +46,15 @@ public class ImportServiceImpl implements ImportService {
 
     private final ImportBatchMapper importBatchMapper;
     private final ImportAsyncService importAsyncService;
+    private final ClassSizeGuard classSizeGuard;
     private final TextbookProperties properties;
     private final ConfigService configService;
     private final SemesterActiveService activeSemesterService;
     private final SemesterMapper semesterMapper;
 
     @Override
-    public Long startImport(String bizType, Long semesterId, MultipartFile file) {
+    public Long startImport(String bizType, Long semesterId, MultipartFile file,
+                            boolean confirmClassSizeShrink) {
         String type = normalizeBizType(bizType);
         if ("change".equals(type)) {
             throw new BizException(ErrorCode.PARAM_INVALID, "异动批量导入请使用 /api/secretary/change/import");
@@ -63,6 +66,28 @@ public class ImportServiceImpl implements ImportService {
 
         CurrentUser operator = SecurityUtils.currentUser();
         Path stored = saveUpload(file, type);
+        // 局部名单门禁（B13）：学生名单会按文件内人数重算班级人数（= 教师填报数量上限），
+        // 疑似局部名单（下调幅度超阈值）时必须显式确认，否则 409 且不建批次（避免"已受理再失败"
+        // 的半成品状态）。门禁与预览共用同一套扫描逻辑，判定口径天然一致。
+        //
+        // 成本（真库实测，本机 MySQL）：扫描 ≈1.3ms/行——10k 行文件给导入请求增加约 13s，
+        // 而同一批次的异步导入耗时约 5 分钟（BCrypt + 分批评分），即门禁只占约 4%；
+        // 已确认（confirmClassSizeShrink=true，前端预览确认后的正常路径）时**完全跳过扫描**
+        // （实测请求 311ms），因此只有「未预览就直接导入」的调用方才付出扫描成本。
+        // 文件大小已由 import.max_file_mb（默认 10MB）兜底，扫描耗时随行数线性增长。
+        if ("student".equals(type) && !confirmClassSizeShrink) {
+            try {
+                ImportPreviewResponse preview = scanStudent(type, targetSemester, stored, false);
+                if (preview.requiresConfirm()) {
+                    deleteQuietly(stored);
+                    throw new BizException(ErrorCode.STATE_CONFLICT, classSizeGuard.confirmMessage(
+                            preview.classSizeDiffs()));
+                }
+            } catch (BizException e) {
+                deleteQuietly(stored);
+                throw e;
+            }
+        }
         ImportBatch batch = new ImportBatch();
         batch.setBizType(type);
         batch.setSemesterId(targetSemester);
@@ -84,14 +109,59 @@ public class ImportServiceImpl implements ImportService {
 
         try {
             importAsyncService.process(type, batch.getId(), targetSemester, stored.toString(),
-                    SecurityUtils.currentUser());
+                    SecurityUtils.currentUser(), confirmClassSizeShrink);
         } catch (Exception e) {
             // 线程池拒绝等：批次标记 failed，可重传
             log.error("导入任务提交失败: batchId={}, bizType={}", batch.getId(), type, e);
             markFailed(batch.getId(), e);
         }
-        log.info("导入批次已启动: batchId={}, bizType={}, semesterId={}", batch.getId(), type, targetSemester);
+        log.info("导入批次已启动: batchId={}, bizType={}, semesterId={}, 班级人数下调已确认={}",
+                batch.getId(), type, targetSemester, confirmClassSizeShrink);
         return batch.getId();
+    }
+
+    /**
+     * 导入预览（只读）：管理员在提交前核对「班级人数 diff / 将新建账号数 / 将停用账号数」。
+     *
+     * <p>不落盘、不建批次、不写任何表；校验口径与真实导入完全一致（同一套 validator）。</p>
+     */
+    @Override
+    public ImportPreviewResponse previewImport(String bizType, Long semesterId, MultipartFile file) {
+        String type = normalizeBizType(bizType);
+        if ("change".equals(type)) {
+            throw new BizException(ErrorCode.PARAM_INVALID, "异动批量导入请使用 /api/secretary/change/import");
+        }
+        if (!"student".equals(type) && !"teacher".equals(type)) {
+            throw new BizException(ErrorCode.PARAM_INVALID,
+                    "导入预览仅支持学生/教师名单（bizType=" + type + "）");
+        }
+        int maxFileMb = configService.getInt(ConfigService.IMPORT_MAX_FILE_MB,
+                properties.getImportConfig().getMaxFileMb());
+        ImportUploadValidator.validate(file, maxFileMb);
+        Long targetSemester = resolveTargetSemester(type, semesterId);
+        try (java.io.InputStream in = file.getInputStream()) {
+            return importAsyncService.preview(type, targetSemester, in, true);
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "文件读取失败，请重试");
+        }
+    }
+
+    /** 只读扫描落盘文件（门禁与预览共用入口）。 */
+    private ImportPreviewResponse scanStudent(String type, Long targetSemester, Path stored,
+                                              boolean runDisableComparison) {
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(stored)) {
+            return importAsyncService.preview(type, targetSemester, in, runDisableComparison);
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "文件读取失败，请重试");
+        }
+    }
+
+    private void deleteQuietly(Path path) {
+        try {
+            java.nio.file.Files.deleteIfExists(path);
+        } catch (IOException e) {
+            log.warn("导入临时文件删除失败: {}", path);
+        }
     }
 
     @Override

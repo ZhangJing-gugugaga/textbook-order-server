@@ -6,6 +6,7 @@ import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.importexport.ImportService;
 import com.tian.textbook.importexport.dto.BatchStartResponse;
+import com.tian.textbook.importexport.dto.ImportPreviewResponse;
 import com.tian.textbook.importexport.support.DownloadSupport;
 import com.tian.textbook.importexport.template.TemplateService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -72,6 +73,13 @@ public class AdminImportController {
 
     // ============ 名单导入（people:student:import / people:teacher:import） ============
 
+    /**
+     * 名单导入（学生/教师）。
+     *
+     * <p>{@code confirmClassSizeShrink}（B13 局部名单防护）：学生名单会按文件内人数重算班级人数
+     * （= 教师填报数量上限），疑似局部名单（下调比例超阈值且不少于下限人数）时必须显式传 true，
+     * 否则 409 且 message 回显逐班 diff；先调 {@code POST /api/admin/user/import/preview} 可预览。</p>
+     */
     @AuditLog(action = "IMPORT", resource = "import_batch")
     @PostMapping("/user/import")
     @PreAuthorize("(#role == 'student' and hasAuthority('people:student:import')) "
@@ -79,9 +87,24 @@ public class AdminImportController {
     public ApiResponse<BatchStartResponse> importUsers(
             @RequestParam String role,
             @RequestParam(required = false) Long semesterId,
+            @RequestParam(required = false, defaultValue = "false") boolean confirmClassSizeShrink,
             @RequestParam("file") MultipartFile file) {
-        Long batchId = importService.startImport(role, semesterId, file);
+        Long batchId = importService.startImport(role, semesterId, file, confirmClassSizeShrink);
         return ApiResponse.ok(new BatchStartResponse(batchId));
+    }
+
+    /**
+     * 名单导入预览（只读，B13）：不落库、不建批次，返回「班级人数 diff / 将新建账号数 /
+     * 将停用账号数 / 错误行样例」——管理员据此确认这份名单是全量还是局部，再决定是否导入。
+     */
+    @PostMapping("/user/import/preview")
+    @PreAuthorize("(#role == 'student' and hasAuthority('people:student:import')) "
+            + "or (#role == 'teacher' and hasAuthority('people:teacher:import'))")
+    public ApiResponse<ImportPreviewResponse> previewUsers(
+            @RequestParam String role,
+            @RequestParam(required = false) Long semesterId,
+            @RequestParam("file") MultipartFile file) {
+        return ApiResponse.ok(importService.previewImport(role, semesterId, file));
     }
 
     @GetMapping("/user/import/template")

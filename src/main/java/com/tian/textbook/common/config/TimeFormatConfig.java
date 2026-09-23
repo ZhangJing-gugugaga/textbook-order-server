@@ -16,6 +16,7 @@ import org.springframework.format.FormatterRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.io.IOException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -45,6 +46,7 @@ public class TimeFormatConfig implements WebMvcConfigurer {
         return builder -> builder.postConfigurer(mapper -> {
             SimpleModule module = new SimpleModule("lenientLocalDateTime");
             module.addDeserializer(LocalDateTime.class, new LenientLocalDateTimeDeserializer());
+            module.addDeserializer(LocalDate.class, new LenientLocalDateDeserializer());
             mapper.registerModule(module);
         });
     }
@@ -55,6 +57,7 @@ public class TimeFormatConfig implements WebMvcConfigurer {
     @Override
     public void addFormatters(FormatterRegistry registry) {
         registry.addConverter(new StringToLocalDateTimeConverter());
+        registry.addConverter(new StringToLocalDateConverter());
     }
 
     /** body：字符串走 {@link TimeFormats}，非字符串（如 ISO 数组形式）交回 Jackson 默认实现。 */
@@ -92,6 +95,44 @@ public class TimeFormatConfig implements WebMvcConfigurer {
                 return null;
             }
             return TimeFormats.parseInput(source);
+        }
+    }
+
+    /**
+     * body：{@code LocalDate} 宽容解析（{@code yyyy-MM-dd}，容忍带时间的写法取日期部分）。
+     *
+     * <p>与 {@link LenientLocalDateTimeDeserializer} 同一口径：日期字段（学期 startDate/endDate）
+     * 在不同调用方手里可能是 {@code 2026-09-01} 或 {@code 2026-09-01 00:00:00}，只为多打了时间
+     * 就 400 属于把实现细节当契约。</p>
+     */
+    static class LenientLocalDateDeserializer extends JsonDeserializer<LocalDate> {
+
+        @Override
+        public LocalDate deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            if (!p.hasToken(JsonToken.VALUE_STRING)) {
+                throw InvalidFormatException.from(p, TimeFormats.DATE_HINT, p.getText(), LocalDate.class);
+            }
+            String text = p.getText();
+            if (text == null || text.isBlank()) {
+                return null;
+            }
+            try {
+                return TimeFormats.parseInputDate(text);
+            } catch (DateTimeParseException e) {
+                throw InvalidFormatException.from(p, TimeFormats.DATE_HINT, text, LocalDate.class);
+            }
+        }
+    }
+
+    /** query/path 的 {@code LocalDate} 宽容解析（与 body 同口径）。 */
+    static class StringToLocalDateConverter implements Converter<String, LocalDate> {
+
+        @Override
+        public LocalDate convert(String source) {
+            if (source == null || source.isBlank()) {
+                return null;
+            }
+            return TimeFormats.parseInputDate(source);
         }
     }
 }

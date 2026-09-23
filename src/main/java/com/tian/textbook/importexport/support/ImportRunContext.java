@@ -40,6 +40,12 @@ public class ImportRunContext {
     private final Long semesterId;
     /** 目标学期即 active 学期时才同步 sys_user 归属冗余列（SPEC §5.2：不污染 active 归属） */
     private final boolean writeUserAffiliation;
+    /**
+     * 调用方是否已确认「班级人数下调超阈值」（B13 局部名单防护）。
+     * 仅用于审计留痕：确认为真时批次摘要记 {@code classSizeShrinkConfirmed=true}，
+     * 便于事后追溯「这次把上限压小是管理员明确点过的」。
+     */
+    private final boolean classSizeShrinkConfirmed;
 
     private final Set<String> userNos = new HashSet<>();
     private final Set<Long> collegeIds = new HashSet<>();
@@ -70,10 +76,20 @@ public class ImportRunContext {
                             CollegeMapper collegeMapper, MajorMapper majorMapper, SchoolClassMapper schoolClassMapper,
                             SysUserMapper userMapper, SysRoleMapper roleMapper, SysUserRoleMapper userRoleMapper,
                             SemesterMapper semesterMapper, UserSemesterProfileMapper profileMapper) {
+        this(batchId, bizType, semesterId, writeUserAffiliation, false, collegeMapper, majorMapper,
+                schoolClassMapper, userMapper, roleMapper, userRoleMapper, semesterMapper, profileMapper);
+    }
+
+    public ImportRunContext(Long batchId, String bizType, Long semesterId, boolean writeUserAffiliation,
+                            boolean classSizeShrinkConfirmed,
+                            CollegeMapper collegeMapper, MajorMapper majorMapper, SchoolClassMapper schoolClassMapper,
+                            SysUserMapper userMapper, SysRoleMapper roleMapper, SysUserRoleMapper userRoleMapper,
+                            SemesterMapper semesterMapper, UserSemesterProfileMapper profileMapper) {
         this.batchId = batchId;
         this.bizType = bizType;
         this.semesterId = semesterId;
         this.writeUserAffiliation = writeUserAffiliation;
+        this.classSizeShrinkConfirmed = classSizeShrinkConfirmed;
         this.collegeMapper = collegeMapper;
         this.majorMapper = majorMapper;
         this.schoolClassMapper = schoolClassMapper;
@@ -98,6 +114,10 @@ public class ImportRunContext {
 
     public boolean writeUserAffiliation() {
         return writeUserAffiliation;
+    }
+
+    public boolean classSizeShrinkConfirmed() {
+        return classSizeShrinkConfirmed;
     }
 
     public Set<String> userNos() {

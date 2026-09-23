@@ -63,6 +63,22 @@ public class TextbookProperties {
     public static class Import {
         /** 上传上限 MB（与 system_config.import.max_file_mb 对应） */
         private int maxFileMb = 10;
+        /**
+         * 局部名单防护（B13）：学生名单导入会把 {@code school_class.student_count} 按
+         * 「文件内该班去重人数」重算，而班级人数是教师填报数量的硬上限——文件里只放了几行
+         * 局部名单就会把整班上限压小（线上实测 50 → 2，该班教师填报随即被卡死）。
+         *
+         * <p>下调幅度同时满足「比例 &gt; 本值(%)」与「绝对人数 &ge;
+         * {@link #classSizeShrinkConfirmMinDrop}」时视为疑似局部名单：导入请求必须带
+         * {@code confirmClassSizeShrink=true}，否则 409 并回显逐班 diff
+         * （{@code POST /api/admin/user/import/preview} 可先预览）。</p>
+         */
+        private int classSizeShrinkConfirmPct = 20;
+        /**
+         * 局部名单防护的绝对人数下限：小班（如 3 人班降到 2 人）比例天然很大，
+         * 只用比例判定会把正常的小幅调整也拦下，故同时要求下调人数不少于本值。
+         */
+        private int classSizeShrinkConfirmMinDrop = 5;
         private final Pool pool = new Pool();
     }
 

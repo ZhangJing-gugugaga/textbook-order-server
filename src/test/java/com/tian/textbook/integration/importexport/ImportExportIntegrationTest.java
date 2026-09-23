@@ -233,31 +233,100 @@ class ImportExportIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("班级人数（W2）：按去重学号统计（重复行不放大上限），下调写入审计摘要")
+    @DisplayName("班级人数（W2）：按去重学号统计（重复行不放大上限）；局部名单下调超阈值必须先确认（B13）")
     void importStudents_classSizeCountsDistinctUserNos() {
         seed();
-        // 预置「已维护的真实人数」50：局部名单会把上限改小，必须留痕（否则教师填报莫名被卡）
+        // 预置「已维护的真实人数」50：局部名单会把上限改小（线上实测 50 → 2 直接卡死教师填报），
+        // 因此下调超阈值必须显式确认后才允许落库（B13 局部名单防护）
         classMapper.update(null, com.baomidou.mybatisplus.core.toolkit.Wrappers
                 .<com.tian.textbook.system.entity.SchoolClass>lambdaUpdate()
                 .eq(com.tian.textbook.system.entity.SchoolClass::getId, classA1)
                 .set(com.tian.textbook.system.entity.SchoolClass::getStudentCount, 50));
 
+        // ① 未确认 → 409，且不建批次、不改人数（避免「已受理再失败」的半成品状态）
+        assertThatThrownBy(() -> importService.startImport("student", semesterId, studentFile(
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
+                "2024002|李四|计算机学院|软件工程|软工2401|13800000002"), false))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(((BizException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.STATE_CONFLICT))
+                .hasMessageContaining("软工2401")
+                .hasMessageContaining("50 → 2")
+                .hasMessageContaining("confirmClassSizeShrink=true");
+        assertThat(classMapper.selectByIdSoft(classA1).getStudentCount())
+                .as("被拒的导入不得改动班级人数").isEqualTo(50);
+
+        // ② 显式确认 → 正常导入，人数按去重学号重算
         Long batchId = importService.startImport("student", semesterId, studentFile(
                 "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
                 "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
-                "2024002|李四|计算机学院|软件工程|软工2401|13800000002"));
+                "2024002|李四|计算机学院|软件工程|软工2401|13800000002"), true);
         ImportBatch batch = awaitDone(batchId);
         assertThat(batch.getStatus()).isEqualTo("done");
 
         // 3 行但只有 2 个学号 → 2 人（此前按行数计数会把上限算成 3）
         assertThat(classMapper.selectByIdSoft(classA1).getStudentCount()).isEqualTo(2);
 
-        // 审计摘要记录班级人数更新与下调数（供管理员追溯「上限为何变小」）
+        // 审计摘要记录班级人数更新与下调数 + 是否已确认（供管理员追溯「上限为何变小」）
         var audit = auditService.query(null, null, AuditService.IMPORT, "import_batch", null, null, 1, 20);
         assertThat(audit.list()).isNotEmpty();
         assertThat(audit.list().get(0).getDetailJson())
                 .containsEntry("classSizeUpdates", 1)
-                .containsEntry("classSizeShrinks", 1);
+                .containsEntry("classSizeShrinks", 1)
+                .containsEntry("classSizeShrinkConfirmed", true);
+    }
+
+    @Test
+    @DisplayName("导入预览（B13）：只读返回班级人数 diff 与将新建账号数，不落库、不建批次")
+    void previewImport_returnsClassSizeDiffWithoutWriting() {
+        seed();
+        classMapper.update(null, com.baomidou.mybatisplus.core.toolkit.Wrappers
+                .<com.tian.textbook.system.entity.SchoolClass>lambdaUpdate()
+                .eq(com.tian.textbook.system.entity.SchoolClass::getId, classA1)
+                .set(com.tian.textbook.system.entity.SchoolClass::getStudentCount, 50));
+        long batchesBefore = importBatchMapper.selectCount(null);
+
+        var preview = importService.previewImport("student", semesterId, studentFile(
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
+                "2024002|李四|计算机学院|软件工程|软工2401|13800000002",
+                "2024003|王五|计算机学院|软件工程|软工2401|13800000003"));
+
+        assertThat(preview.totalRows()).isEqualTo(3);
+        assertThat(preview.okRows()).isEqualTo(3);
+        assertThat(preview.errorRows()).isZero();
+        assertThat(preview.newUserCount()).isEqualTo(3);
+        assertThat(preview.requiresConfirm()).as("50 → 3 命中阈值，需确认").isTrue();
+        assertThat(preview.classSizeDiffs()).singleElement().satisfies(diff -> {
+            assertThat(diff.className()).isEqualTo("软工2401");
+            assertThat(diff.currentCount()).isEqualTo(50);
+            assertThat(diff.incomingCount()).isEqualTo(3);
+            assertThat(diff.drop()).isEqualTo(47);
+            assertThat(diff.requiresConfirm()).isTrue();
+        });
+
+        // 只读：人数、批次、账号都没变
+        assertThat(classMapper.selectByIdSoft(classA1).getStudentCount()).isEqualTo(50);
+        assertThat(importBatchMapper.selectCount(null)).isEqualTo(batchesBefore);
+        assertThat(userMapper.selectByUserNo("2024001")).isNull();
+    }
+
+    @Test
+    @DisplayName("B13：下调幅度未达阈值（小班 2 → 1）不阻断，正常导入")
+    void importStudents_smallShrinkBelowThreshold_isNotBlocked() {
+        seed();
+        // 先建 2 人基线（班级人数 = 2）
+        assertThat(awaitDone(importService.startImport("student", semesterId, studentFile(
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001",
+                "2024002|李四|计算机学院|软件工程|软工2401|13800000002"))).getStatus())
+                .isEqualTo("done");
+        assertThat(classMapper.selectByIdSoft(classA1).getStudentCount()).isEqualTo(2);
+
+        // 2 → 1：比例 50% 但绝对下调仅 1 人（< 下限 5）→ 不阻断（否则正常的小幅调整全被拦）
+        ImportBatch batch = awaitDone(importService.startImport("student", semesterId, studentFile(
+                "2024001|张三|计算机学院|软件工程|软工2401|13800000001")));
+        assertThat(batch.getStatus()).isEqualTo("done");
+        assertThat(classMapper.selectByIdSoft(classA1).getStudentCount()).isEqualTo(1);
     }
 
     @Test

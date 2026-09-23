@@ -1,5 +1,6 @@
 package com.tian.textbook.importexport;
 
+import com.tian.textbook.importexport.dto.ImportPreviewResponse;
 import com.tian.textbook.importexport.entity.ImportBatch;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -21,7 +22,28 @@ public interface ImportService {
      * @param file       .xlsx 文件（≤10MB，魔数校验）
      * @return batchId（前端轮询 GET /api/batch/{batchId}）
      */
-    Long startImport(String bizType, Long semesterId, MultipartFile file);
+    default Long startImport(String bizType, Long semesterId, MultipartFile file) {
+        return startImport(bizType, semesterId, file, false);
+    }
+
+    /**
+     * 启动异步导入（含局部名单门禁，B13）。
+     *
+     * <p>学生名单导入会按「文件内该班去重人数」重算班级人数（= 教师填报数量上限）。
+     * 若下调幅度命中阈值（比例 &gt; 配置值 且 不少于配置人数下限），视为疑似局部名单：
+     * 未带 {@code confirmClassSizeShrink=true} 时**直接 409 且不建批次**，message 回显逐班
+     * diff 与两条可行路径（改用完整名单，或确认后重提）。</p>
+     *
+     * @param confirmClassSizeShrink 调用方是否已确认「班级人数下调超阈值」
+     */
+    Long startImport(String bizType, Long semesterId, MultipartFile file, boolean confirmClassSizeShrink);
+
+    /**
+     * 导入预览（只读扫描，不落库、不建批次）：班级人数 diff / 将新建账号数 / 将停用账号数。
+     *
+     * <p>与真实导入共用同一套解析与行校验，故预览结果即「此刻导入会发生什么」。</p>
+     */
+    ImportPreviewResponse previewImport(String bizType, Long semesterId, MultipartFile file);
 
     /** 批次进度（total/ok/error/progress_pct/status） */
     ImportBatch getBatch(Long batchId);

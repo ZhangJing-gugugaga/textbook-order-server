@@ -27,6 +27,22 @@ mysql -utextbook -p textbook_order < src/main/resources/db/data-permission.sql #
 > systemd 每 5s 重启一次、永远起不来（`Restart=always`）。
 > 初始化完成后用 `SELECT user_no FROM sys_user WHERE user_no IN ('900001','800101','700101','20230101','600001');`
 > 确认**没有**演示账号（若曾用 local profile 误连生产库，必须立即改口令或删号）。
+>
+> **已灌入过演示/联调账号的库（含生产试运行环境）**：执行一次性清理脚本（幂等，可重复跑）——
+>
+> ```bash
+> mysql -uroot -p textbook_order < src/main/resources/db/cleanup-seed-accounts.sql
+> # 校验（应为 0）：SELECT COUNT(*) FROM sys_user WHERE deleted = 0 AND status = 1
+> #   AND user_no IN ('900001','900002','900003','800101','800102','800103','700101','700102',
+> #                   '700103','700201','700202','20230101','20230102','20230103','20230201',
+> #                   '600001','600002','600003');
+> ```
+>
+> 脚本把这 18 个公开口令账号 `status=0` + `role_version+1` + 撤销全部 refresh（已签发的会话立即失效），
+> 并把其学期归属置为不在册；真实账号（导入生成的学号/工号）不受影响。**这是后端测试报告 P1 风险项**：
+> 这些账号的口令（`Admin@123`/`Sec@12345`/`Tea@12345`/`Stu@12345`/`Sup@12345`）是公开文档内容，
+> 公网可访问的环境里保留一个 `status=1` 的超管账号等于把系统交出去。脚本末尾另附「彻底删除」段
+> （默认注释，仅在无业务数据的演示库使用——删除会留下悬空的 `created_by`/`review_by` 引用）。
 
 > 本地开发：`SPRING_PROFILES_ACTIVE=local` 启动会自动按上述顺序初始化（仅限全新空库）。
 > 生产/试运行不要执行 `data-seed.sql`。
@@ -352,6 +368,17 @@ curl -s localhost:8080/actuator/health   # 期望 {"status":"UP"}
   （提示「服务重启导致中断，请重新发起」），前端不会一直轮询到永远 running 的任务
 - 归档：学期归档 = 置 `active_status=archived` **并同时关闭窗口**（`channel_open=0`
   + `window_status=closed`），数据只读保留、可查可导（D2-A）
+- **归档二次门禁（2026-09-23 生产事故修复）**：`POST /api/admin/semester/{id}/archive` 必须带
+  `version`（乐观锁），窗口进行中（`window_status=open` 或 `channel_open=1`）还必须带
+  `confirmWindowOpen=true`，否则 409。**归档会立刻停掉全站征订业务**（没有 active 学期后，
+  学生选购/教师填报/导出统一报「当前没有激活学期」），因此不要对真实学期做探针式调用。
+  误归档的救援路径：`POST /api/admin/semester/{id}/unarchive`（body `{version, confirm:true}`，
+  仅当当前没有 active 学期时可用；恢复后窗口仍为 closed，需手动重新开启）。
+  运维兜底（仅在无接口可用时）：`UPDATE semester SET active_status='active' WHERE id=<id>;`
+- **局部名单门禁（2026-09-23）**：学生名单导入会把班级人数重算为文件内该班去重人数（教师填报上限），
+  下调比例 > 20% 且 ≥ 5 人时导入返回 409 并要求 `confirmClassSizeShrink=true`；阈值可用
+  `TEXTBOOK_IMPORT_CLASS_SIZE_SHRINK_CONFIRM_PCT` / `..._MIN_DROP` 调整（默认 20 / 5），
+  设为极大值即关闭门禁（不推荐：局部名单会静默压小上限，线上实测 50 → 2 卡死教师填报）
 - 备份恢复演练：建议每学期至少一次（`gunzip -c ... | mysql`），恢复后校验
   `semester` 的 active 学期与 `system_config` 一致
 - **账号被锁定（401 `ACCOUNT_LOCKED`）**：连续 5 次错误口令锁定 15 分钟，且**计数落库、重启不清**。

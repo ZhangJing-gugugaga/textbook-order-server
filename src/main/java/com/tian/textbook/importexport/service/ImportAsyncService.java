@@ -9,6 +9,8 @@ import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.semester.SemesterContextHolder;
 import com.tian.textbook.common.util.FailureMessages;
+import com.tian.textbook.importexport.dto.ClassSizeDiff;
+import com.tian.textbook.importexport.dto.ImportPreviewResponse;
 import com.tian.textbook.importexport.entity.ImportBatch;
 import com.tian.textbook.importexport.excel.ImportErrorRow;
 import com.tian.textbook.importexport.excel.StudentImportRow;
@@ -69,8 +71,12 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ImportAsyncService {
 
+    /** 预览返回的错误明细样例条数（全量明细在真实导入的批次里，这里只做「有多少错、错在哪」的提示） */
+    private static final int PREVIEW_ERROR_SAMPLES = 20;
+
     private final ImportBatchMapper importBatchMapper;
     private final ImportRowWriter rowWriter;
+    private final ClassSizeGuard classSizeGuard;
     private final TextbookProperties properties;
     private final ConfigService configService;
     private final AuditService auditService;
@@ -90,9 +96,11 @@ public class ImportAsyncService {
      *
      * @param filePath 已落盘的上传文件（解析后删除）
      * @param operator 上传操作者（审计留痕：@Async 线程默认不带 SecurityContext）
+     * @param classSizeShrinkConfirmed 调用方是否已确认班级人数下调超阈值（仅审计留痕，B13）
      */
     @Async(AsyncConfig.IMPORT_EXECUTOR)
-    public void process(String bizType, Long batchId, Long semesterId, String filePath, CurrentUser operator) {
+    public void process(String bizType, Long batchId, Long semesterId, String filePath, CurrentUser operator,
+                        boolean classSizeShrinkConfirmed) {
         if (operator != null) {
             // 线程池线程会复用：审计/权限上下文用后必须清理（与 JwtAuthFilter 同一主体构造方式）
             List<GrantedAuthority> authorities = new ArrayList<>();
@@ -111,7 +119,7 @@ public class ImportAsyncService {
             if (!file.exists()) {
                 throw new BizException(ErrorCode.NOT_FOUND, "上传文件不存在，请重传");
             }
-            ImportRunContext ctx = newContext(batchId, bizType, semesterId);
+            ImportRunContext ctx = newContext(batchId, bizType, semesterId, classSizeShrinkConfirmed);
             switch (bizType) {
                 case "student" -> EasyExcel.read(file, StudentImportRow.class, listener(ctx,
                         this::validateStudent, rowWriter::writeStudentRows)).sheet().doRead();
@@ -133,6 +141,80 @@ public class ImportAsyncService {
             log.info("导入批次结束: batchId={}, bizType={}, 耗时={}ms", batchId, bizType,
                     System.currentTimeMillis() - startMs);
         }
+    }
+
+    // ============ 只读扫描（导入预览 + 局部名单门禁，B13） ============
+
+    /**
+     * 只读扫描：走与真实导入**完全相同**的解析与行校验，但不落任何库、不建批次。
+     *
+     * <p>用途：① {@code POST /api/admin/user/import/preview} 让管理员在导入前看到
+     * 「班级人数 diff / 将新建账号数 / 将停用账号数」；② {@code startImport} 的门禁
+     * （局部名单把班级人数下调超阈值 → 未显式确认则 409），因此门禁与预览的判定口径天然一致。</p>
+     *
+     * @param in 上传文件流（调用方负责关闭）
+     */
+    public ImportPreviewResponse preview(String bizType, Long semesterId, java.io.InputStream in,
+                                         boolean runDisableComparison) {
+        ImportRunContext ctx = newContext(null, bizType, semesterId, false);
+        ImportRunSummary summary = scan(bizType, in, ctx);
+        List<ClassSizeDiff> diffs = classSizeGuard.diff(ctx.classCounts());
+        int newUsers = 0;
+        for (String userNo : ctx.userNos()) {
+            if (ctx.user(userNo) == null) {
+                newUsers++;
+            }
+        }
+        boolean comparisonApplies = false;
+        int disableEstimate = 0;
+        if (runDisableComparison && ctx.writeUserAffiliation() && !ctx.collegeIds().isEmpty()
+                && ("student".equals(bizType) || "teacher".equals(bizType))) {
+            Long roleId = ctx.roleId("student".equals(bizType) ? "STUDENT" : "TEACHER");
+            if (roleId != null) {
+                comparisonApplies = true;
+                for (SysUser candidate : userMapper.selectActiveByCollegeIds(new ArrayList<>(ctx.collegeIds()))) {
+                    if (ctx.userNos().contains(candidate.getUserNo())) {
+                        continue;
+                    }
+                    if (!userRoleMapper.selectRoleIdsByUser(candidate.getId()).contains(roleId)) {
+                        continue;
+                    }
+                    disableEstimate++;
+                }
+            }
+        }
+        return new ImportPreviewResponse(bizType, semesterId, summary.total(), summary.okCount(),
+                summary.errors().size() + summary.truncatedErrors(),
+                summary.errors().stream().limit(PREVIEW_ERROR_SAMPLES).toList(),
+                newUsers, comparisonApplies, disableEstimate, diffs,
+                classSizeGuard.requiresConfirm(diffs),
+                classSizeGuard.confirmPct(), classSizeGuard.confirmMinDrop());
+    }
+
+    /** 只读解析：校验器照跑（填充 ctx 的名单/学院/班级计数），落库与进度写全部跳过。 */
+    private ImportRunSummary scan(String bizType, java.io.InputStream in, ImportRunContext ctx) {
+        java.util.concurrent.atomic.AtomicReference<ImportRunSummary> holder =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.function.BiConsumer<ImportRunContext, ImportRunSummary> capture = (context, summary) ->
+                holder.set(summary);
+        switch (bizType) {
+            case "student" -> EasyExcel.read(in, StudentImportRow.class,
+                    listener(ctx, this::validateStudent, ImportAsyncService.<StudentImportRow>noopFlush(), capture))
+                    .sheet().doRead();
+            case "teacher" -> EasyExcel.read(in, TeacherImportRow.class,
+                    listener(ctx, this::validateTeacher, ImportAsyncService.<TeacherImportRow>noopFlush(), capture))
+                    .sheet().doRead();
+            default -> throw new BizException(ErrorCode.PARAM_INVALID,
+                    "导入预览仅支持学生/教师名单（bizType=" + bizType + "）");
+        }
+        ImportRunSummary summary = holder.get();
+        return summary == null ? new ImportRunSummary(0, 0, List.of(), 0) : summary;
+    }
+
+    /** 只读扫描的落库空实现（不写任何表）。 */
+    private static <T> ImportReadListener.RowFlusher<T> noopFlush() {
+        return (rows, context) -> {
+        };
     }
 
     // ============ 行校验（严格模式：不自动创建学院/班级，逐行报错） ============
@@ -331,6 +413,8 @@ public class ImportAsyncService {
         // 班级人数按名单重算的规模（W2）：局部名单会把教师数量上限一并改小，摘要留痕便于追溯
         detail.put("classSizeUpdates", scope.classSizeUpdates());
         detail.put("classSizeShrinks", scope.classSizeShrinks());
+        // B13：下调超阈值时调用方是否已显式确认（true = 管理员点过强确认，不是静默压小）
+        detail.put("classSizeShrinkConfirmed", ctx.classSizeShrinkConfirmed());
         auditService.record(AuditService.IMPORT, "import_batch", String.valueOf(ctx.batchId()), detail);
         log.info("导入完成: batchId={}, bizType={}, total={}, ok={}, error={}（截断明细={}）, 停用={}, 班级人数更新={}（下调={}）",
                 ctx.batchId(), ctx.bizType(), summary.total(), summary.okCount(), errorCount,
@@ -381,11 +465,12 @@ public class ImportAsyncService {
         }
     }
 
-    private ImportRunContext newContext(Long batchId, String bizType, Long semesterId) {
+    private ImportRunContext newContext(Long batchId, String bizType, Long semesterId,
+                                        boolean classSizeShrinkConfirmed) {
         boolean writeUserAffiliation = semesterId != null
                 && semesterId.equals(activeSemesterService.activeId());
         return new ImportRunContext(batchId, bizType, semesterId, writeUserAffiliation,
-                collegeMapper, majorMapper, schoolClassMapper, userMapper, roleMapper,
+                classSizeShrinkConfirmed, collegeMapper, majorMapper, schoolClassMapper, userMapper, roleMapper,
                 userRoleMapper, semesterMapper, profileMapper);
     }
 
@@ -393,6 +478,14 @@ public class ImportAsyncService {
                                               ImportReadListener.RowValidator<T> validator,
                                               ImportReadListener.RowFlusher<T> flusher) {
         return new ImportReadListener<>(ctx, importBatchMapper, validator, flusher, this::finalizeBatch);
+    }
+
+    /** 只读扫描用：flusher 空转、finalizer 由调用方接管（不写批次终态）。 */
+    private <T> ImportReadListener<T> listener(ImportRunContext ctx,
+                                              ImportReadListener.RowValidator<T> validator,
+                                              ImportReadListener.RowFlusher<T> flusher,
+                                              java.util.function.BiConsumer<ImportRunContext, ImportRunSummary> finalizer) {
+        return new ImportReadListener<>(ctx, importBatchMapper, validator, flusher, finalizer);
     }
 
     private static String trim(String value) {

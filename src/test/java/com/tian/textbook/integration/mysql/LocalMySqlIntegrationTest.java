@@ -219,7 +219,10 @@ class LocalMySqlIntegrationTest {
             assertThat(count(statement, "sys_permission")).isEqualTo(37);
             assertThat(count(statement, "sys_user")).isEqualTo(18);
             assertThat(count(statement, "sys_user_role")).isEqualTo(19);
-            assertThat(count(statement, "sys_role_permission")).isEqualTo(50);
+            // 43 = ADMIN 28（37 条权限去掉 2 条供货商 + 7 条角色专属自助类，2026-09-22 收权）
+            //     + SECRETARY 6 + TEACHER 4 + STUDENT 3 + SUPPLIER 2
+            // 生产实测口径见《后端测试报告-…-20260923》B1/B2（ADMIN=28 / 6 / 4 / 3 / 2）
+            assertThat(count(statement, "sys_role_permission")).isEqualTo(43);
             assertThat(count(statement, "college")).isEqualTo(2);
             assertThat(count(statement, "system_config")).isEqualTo(8);
         }

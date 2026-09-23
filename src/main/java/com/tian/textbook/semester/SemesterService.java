@@ -7,7 +7,9 @@ import com.tian.textbook.common.error.BizException;
 import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.notify.WindowChangeNotifier;
 import com.tian.textbook.semester.dto.SemesterActivateRequest;
+import com.tian.textbook.semester.dto.SemesterArchiveRequest;
 import com.tian.textbook.semester.dto.SemesterCreateRequest;
+import com.tian.textbook.semester.dto.SemesterUnarchiveRequest;
 import com.tian.textbook.semester.dto.SemesterUpdateRequest;
 import com.tian.textbook.semester.dto.WindowExtendRequest;
 import com.tian.textbook.semester.dto.WindowSetRequest;
@@ -143,6 +145,11 @@ public class SemesterService {
      * 由 user_semester_profile 同步 sys_user 归属冗余列 → 写审计。
      *
      * <p>失败（version 冲突 / uk_semester_active 唯一约束命中）→ 回滚 + 409。</p>
+     *
+     * <p>校验顺序为「先状态、后参数」：Bean Validation 在方法调用前执行，若 version 用
+     * {@code @NotNull} 声明，则「重复 activate 已在 active 的学期」会返回 400 参数错误，
+     * 而契约（API.md §3.2）规定该场景是 409 状态冲突——联调据此判为偏差。此处按状态门禁
+     * → version 必填 → version 匹配的顺序判定，保证「状态冲突优先于参数错误」。</p>
      */
     @Transactional
     public Semester activate(Long id, SemesterActivateRequest request) {
@@ -152,21 +159,25 @@ public class SemesterService {
             if (target == null) {
                 throw new BizException(ErrorCode.NOT_FOUND, "学期不存在");
             }
+            if ("archived".equals(target.getActiveStatus())) {
+                // 归档不可逆：没有「取消归档 / 回退切换」接口，归档学期不能直接回到 active。
+                // 唯一的回退路径是受限的 unarchive（要求当前无 active 学期），文案一并说明。
+                throw new BizException(ErrorCode.STATE_CONFLICT,
+                        "该学期已归档，不能再次激活；如需回退请使用「撤销归档」（要求当前没有激活学期）");
+            }
             if (!"draft".equals(target.getActiveStatus())) {
-                // 归档不可逆：没有「取消归档 / 回退切换」接口，归档学期永远回不到 active。
-                // 文案直接说明，避免调用方（或运维）以为重试/换参数就能激活。
-                throw new BizException(ErrorCode.STATE_CONFLICT, "archived".equals(target.getActiveStatus())
-                        ? "该学期已归档，归档不可逆（系统不提供取消归档），不能再次激活；仅 draft 学期可激活"
-                        : "仅 draft 学期可激活");
+                // active：重复激活 → 409（此前落到 version 校验，空 body 时被 400 掩盖）
+                throw new BizException(ErrorCode.STATE_CONFLICT, "该学期已是激活学期，无需重复激活");
+            }
+            if (request == null || request.version() == null) {
+                throw new BizException(ErrorCode.PARAM_INVALID,
+                        "version 不能为空：请先读取学期最新状态（GET /api/admin/semester/{id}）后重试");
             }
             if (!target.getVersion().equals(request.version())) {
                 throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的学期状态，请刷新");
             }
             Semester old = semesterMapper.selectActive();
             if (old != null) {
-                if (old.getId().equals(target.getId())) {
-                    throw new BizException(ErrorCode.STATE_CONFLICT, "该学期已是激活学期");
-                }
                 int archived = semesterMapper.archiveIfActive(old.getId());
                 if (archived == 0) {
                     throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的学期状态，请刷新");
@@ -201,28 +212,133 @@ public class SemesterService {
     /**
      * 手动归档（仅 active 学期；归档后数据只读保留，可查可导，D2-A）。
      *
-     * <p>**不可逆**：归档后不能再次激活，也没有回退接口；active→draft 的路径同样不存在
-     * （draft 只能由新建产生）。因此调用方必须在确认弹窗里明确「此操作不可撤销」。</p>
+     * <p>**二次门禁（B11 生产缺陷修复）**：归档会立刻把全站征订业务停下（没有 active 学期后，
+     * 学生选购/教师填报/导出统一报「当前没有激活学期，请先创建并激活学期」），且不可逆。
+     * 原实现不读 body、无任何确认，线上一次空 body 调用即把进行中的学期归档，只能整库恢复。
+     * 现在要求：</p>
+     * <ol>
+     *   <li>{@code version} 必填（乐观锁）：拒绝「读到旧状态后按旧认知归档」；</li>
+     *   <li>窗口进行中（{@code window_status=open} 或 {@code channel_open=1}）时必须
+     *       {@code confirmWindowOpen=true}：否则 409 并说明影响，由前端强确认后重试。</li>
+     * </ol>
+     *
+     * <p>校验顺序为「先状态、后参数、再窗口确认」：重复归档/归档非 active 学期的语义是
+     * 409 状态冲突，不能被 400 参数错误掩盖。</p>
      */
     @Transactional
-    public void archive(Long id) {
+    public void archive(Long id, SemesterArchiveRequest request) {
         SEMESTER_LOCK.lock();
         try {
             Semester semester = get(id);
             if (!"active".equals(semester.getActiveStatus())) {
                 throw new BizException(ErrorCode.STATE_CONFLICT,
-                        "仅 active 学期可归档；且归档不可逆（归档后不能再次激活）");
+                        "仅 active 学期可归档；当前状态：" + semester.getActiveStatus()
+                                + "（归档不可逆，撤销归档仅对误归档的 active 学期开放）");
+            }
+            Integer version = request == null ? null : request.version();
+            if (version == null) {
+                throw new BizException(ErrorCode.PARAM_INVALID,
+                        "version 不能为空：请先读取学期最新状态（GET /api/admin/semester/{id}）后重试");
+            }
+            if (!semester.getVersion().equals(version)) {
+                throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的学期状态，请刷新");
+            }
+            if (windowLive(semester) && !Boolean.TRUE.equals(request.confirmWindowOpen())) {
+                throw new BizException(ErrorCode.STATE_CONFLICT,
+                        "该学期征订窗口仍在进行中（" + windowDescription(semester) + "）：归档会立即停止"
+                                + "全站征订业务（学生选购、教师填报、导出将统一报「当前没有激活学期」），"
+                                + "且归档不可逆。请先关闭窗口再归档，或在前端强确认后带 "
+                                + "confirmWindowOpen=true 重新提交");
             }
             int archived = semesterMapper.archiveIfActive(id);
             if (archived == 0) {
                 throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的学期状态，请刷新");
             }
-            auditService.record(AuditService.SEMESTER_SWITCH, "semester", String.valueOf(id),
-                    Map.of("op", "archive", "name", semester.getName()));
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("op", "archive");
+            detail.put("name", semester.getName());
+            detail.put("windowStatus", semester.getWindowStatus());
+            detail.put("channelOpen", semester.getChannelOpen());
+            detail.put("windowStart", semester.getWindowStart());
+            detail.put("windowEnd", semester.getWindowEnd());
+            detail.put("confirmWindowOpen", Boolean.TRUE.equals(request.confirmWindowOpen()));
+            auditService.record(AuditService.SEMESTER_SWITCH, "semester", String.valueOf(id), detail);
+            if (windowLive(semester)) {
+                log.warn("进行中窗口的学期被显式确认归档: id={}, name={}, 窗口={} ~ {}",
+                        id, semester.getName(), semester.getWindowStart(), semester.getWindowEnd());
+            }
             activeSemesterService.evict();
         } finally {
             SEMESTER_LOCK.unlock();
         }
+    }
+
+    /**
+     * 撤销归档（受限回滚，B15）：把误归档的学期恢复为 active。
+     *
+     * <p>只在「当前没有任何 active 学期」时允许——这正是误归档（或误操作）后的现场；
+     * 若已有 active 学期，说明归档是双缓冲切换的正常结果，回滚会造成两个 active 或静默归档
+     * 新学期，因此拒绝并提示先归档当前 active 学期。</p>
+     *
+     * <p>回滚不恢复窗口：归档时窗口已被强制关闭（{@code channel_open=0 / window_status=closed}），
+     * 恢复后保持关闭，由管理员显式重新开启，避免一次回滚就把对外填报通道打开。</p>
+     */
+    @Transactional
+    public Semester unarchive(Long id, SemesterUnarchiveRequest request) {
+        SEMESTER_LOCK.lock();
+        try {
+            Semester semester = get(id);
+            if (!"archived".equals(semester.getActiveStatus())) {
+                throw new BizException(ErrorCode.STATE_CONFLICT,
+                        "仅已归档（archived）学期可撤销归档；当前状态：" + semester.getActiveStatus());
+            }
+            Semester active = semesterMapper.selectActive();
+            if (active != null) {
+                throw new BizException(ErrorCode.STATE_CONFLICT,
+                        "当前已有激活学期（" + active.getName() + "）：请先归档它，再撤销归档本学期的归档状态"
+                                + "（同一时刻仅允许一个 active 学期）");
+            }
+            if (request == null || !Boolean.TRUE.equals(request.confirm())) {
+                throw new BizException(ErrorCode.PARAM_INVALID,
+                        "撤销归档需显式确认：请在请求体传 confirm=true（该操作会把学期恢复为 active，"
+                                + "全站业务随即恢复可用）");
+            }
+            if (request.version() == null) {
+                throw new BizException(ErrorCode.PARAM_INVALID,
+                        "version 不能为空：请先读取学期最新状态（GET /api/admin/semester/{id}）后重试");
+            }
+            if (!semester.getVersion().equals(request.version())) {
+                throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的学期状态，请刷新");
+            }
+            int restored = semesterMapper.unarchiveIfArchived(id, semester.getVersion());
+            if (restored == 0) {
+                throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的学期状态，请刷新");
+            }
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("op", "unarchive");
+            detail.put("name", semester.getName());
+            detail.put("windowStatus", semester.getWindowStatus());
+            detail.put("channelOpen", semester.getChannelOpen());
+            detail.put("note", "撤销归档（受限回滚）；窗口保持关闭，需手动重新开启");
+            auditService.record(AuditService.SEMESTER_SWITCH, "semester", String.valueOf(id), detail);
+            activeSemesterService.evict();
+            log.warn("学期撤销归档（受限回滚）: id={}, name={}；窗口仍为 closed，需手动重新开启",
+                    id, semester.getName());
+            return semesterMapper.selectByIdSoft(id);
+        } finally {
+            SEMESTER_LOCK.unlock();
+        }
+    }
+
+    /** 窗口是否处于「进行中」：window_status=open 或 channel_open=1（任一为真即视为对外通道开启）。 */
+    private boolean windowLive(Semester semester) {
+        return Integer.valueOf(1).equals(semester.getChannelOpen())
+                || "open".equals(semester.getWindowStatus());
+    }
+
+    private String windowDescription(Semester semester) {
+        return "window_status=" + semester.getWindowStatus() + "，channel_open=" + semester.getChannelOpen()
+                + "，窗口 " + semester.getWindowStart() + " ~ " + semester.getWindowEnd();
     }
 
     // ============ 窗口引擎（W11，SPEC §6） ============

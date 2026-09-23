@@ -5,6 +5,7 @@ import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.semester.SemesterContextHolder;
 import com.tian.textbook.semester.SemesterService;
 import com.tian.textbook.semester.dto.SemesterActivateRequest;
+import com.tian.textbook.semester.dto.SemesterArchiveRequest;
 import com.tian.textbook.semester.entity.Semester;
 import com.tian.textbook.semester.mapper.SemesterMapper;
 import com.tian.textbook.support.IntegrationTestBase;
@@ -182,26 +183,32 @@ class SemesterDoubleBufferIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("归档不可逆：archived 学期不能再激活，文案明说不可逆（前端确认弹窗据此提示）")
+    @DisplayName("归档不可逆：archived 学期不能再激活（文案指向受限回滚），重复归档 409")
     void archivedSemester_cannotBeActivatedAgain() {
         Semester semester = seeder.semester("2025-2026-4", LocalDate.of(2025, 9, 1),
                 LocalDate.of(2026, 1, 15), null, null, 1, 1);
         semesterMapper.activateIfDraft(semester.getId(), semester.getVersion());
-        semesterService.archive(semester.getId());
-        assertThat(semesterMapper.selectByIdSoft(semester.getId()).getActiveStatus()).isEqualTo("archived");
+        // 归档需 version 乐观锁（B11 二次门禁）；本用例学期窗口未开启，无需 confirmWindowOpen
+        semesterService.archive(semester.getId(),
+                new SemesterArchiveRequest(semester.getVersion(), null));
+        Semester archived = semesterMapper.selectByIdSoft(semester.getId());
+        assertThat(archived.getActiveStatus()).isEqualTo("archived");
 
-        // 归档后无法回到 active：没有「取消归档」接口，也没有 active→draft 的回退路径
+        // 归档后无法回到 active：激活接口不接受 archived，回退只能走受限的撤销归档
         assertThatThrownBy(() -> semesterService.activate(semester.getId(),
-                new SemesterActivateRequest(semester.getVersion())))
+                new SemesterActivateRequest(archived.getVersion())))
                 .isInstanceOf(BizException.class)
                 .satisfies(e -> assertThat(((BizException) e).getErrorCode())
                         .isEqualTo(ErrorCode.STATE_CONFLICT))
-                .hasMessageContaining("归档不可逆");
+                .hasMessageContaining("已归档");
 
-        // 重复归档同样被拒（且文案说明归档不可逆）
-        assertThatThrownBy(() -> semesterService.archive(semester.getId()))
+        // 重复归档同样被拒（状态门禁先于 version 参数校验）
+        assertThatThrownBy(() -> semesterService.archive(semester.getId(),
+                new SemesterArchiveRequest(archived.getVersion(), null)))
                 .isInstanceOf(BizException.class)
-                .hasMessageContaining("归档不可逆");
+                .satisfies(e -> assertThat(((BizException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.STATE_CONFLICT))
+                .hasMessageContaining("仅 active 学期可归档");
     }
 
     @Test

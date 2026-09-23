@@ -1,6 +1,6 @@
 # 教材征订系统 · 服务端 API 手册
 
-> 版本 V1.0.6 · 2026-09-22 · 依据 `SPEC.md` §11 契约基线（95 个端点；V1.0.1–3 联调新增 3 个最小权限只读端点）
+> 版本 V1.0.7 · 2026-09-23 · 依据 `SPEC.md` §11 契约基线（97 个端点；V1.0.1–3 联调新增 3 个最小权限只读端点，V1.0.7 新增导入预览与撤销归档）
 > 定位：**前后端联调速查手册**。唯一契约源为 springdoc-openapi 生成的 OpenAPI 3 文档（`GET /v3/api-docs`、`/swagger-ui.html`），本文档与代码同步维护，冲突时以 OpenAPI 为准。
 > 配套文档：[README.md](README.md)（环境/账号/测试）、[docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)（实现范围与裁剪）、[docs/deployment.md](docs/deployment.md)（部署）
 
@@ -16,7 +16,7 @@
 | 前端调用 | **一律相对路径**（Web 同域 `/api`；小程序 baseUrl 单点配置） |
 | 请求头 | `Authorization: Bearer <accessToken>`；`Content-Type: application/json`（上传为 `multipart/form-data`）；可选 `X-Device-Id`（refresh 轮换的会话标识） |
 | 字符集 | UTF-8 |
-| 时间格式 | **入参**（body 与 query 一致）：`2026-09-21T09:30:00`（ISO-8601，推荐）与 `2026-09-21 09:30:00`（含缺秒 `09:30`）**都接受**，时区固定 Asia/Shanghai；审计查询的 `startAt/endAt` 另接受纯日期 `2026-09-21`（下界取当日 00:00:00，上界取当日 23:59:59.999999999）。**出参**：ISO-8601 本地日期时间（`2026-09-21T09:30:00`，含微秒时为 `2026-09-21T09:30:00.123456`）——`spring.jackson.date-format` 只作用于 `java.util.Date`，不影响 JSR-310 类型，前端需自行格式化（见 §5.10） |
+| 时间格式 | **入参**（body 与 query 一致）：`2026-09-21T09:30:00`（ISO-8601，推荐）与 `2026-09-21 09:30:00`（含缺秒 `09:30`）**都接受**，时区固定 Asia/Shanghai；**日期字段（`LocalDate`，如学期 `startDate/endDate`）**同样容忍带时间的写法（取日期部分：`2026-09-01 00:00:00` ≡ `2026-09-01`）；审计查询的 `startAt/endAt` 另接受纯日期 `2026-09-21`（下界取当日 00:00:00，上界取当日 23:59:59.999999999）。**出参**：ISO-8601 本地日期时间（`2026-09-21T09:30:00`，含微秒时为 `2026-09-21T09:30:00.123456`）——`spring.jackson.date-format` 只作用于 `java.util.Date`，不影响 JSR-310 类型，前端需自行格式化（见 §5.10） |
 | CORS | **默认不返回任何 CORS 响应头**（仅同域访问；Web 走 Nginx 同域反代，小程序不受 CORS 约束）。跨域直连需设 `TEXTBOOK_CORS_ORIGINS`（显式 origin 白名单，**严禁 `*`**，配了 `*` 直接启动失败） |
 
 ### 1.2 统一响应包络
@@ -246,8 +246,9 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | GET | `/api/admin/semester/{id}` | `semester:semester:manage` | 学期详情 |
 | POST | `/api/admin/semester` | `semester:semester:manage` | 新建学期（draft） |
 | PUT | `/api/admin/semester/{id}` | `semester:semester:manage` | 编辑基本信息（名称/起止日期/窗口起止/auto 开关） |
-| POST | `/api/admin/semester/{id}/activate` | `semester:semester:activate` | **双缓冲原子切换**（body 带 `version` 乐观锁；version 不匹配 → 409「存在更新的学期状态，请刷新」）。**不可逆**：切换时旧 active 自动归档，系统不提供回退接口 |
-| POST | `/api/admin/semester/{id}/archive` | `semester:semester:activate` | 归档（数据只读保留，可查可导）。**不可逆**：归档后不能再次激活（`archived → active` 无路径，重复激活返回 409「归档不可逆」）；前端确认弹窗须写明「此操作不可撤销」 |
+| POST | `/api/admin/semester/{id}/activate` | `semester:semester:activate` | **双缓冲原子切换**（body 带 `version` 乐观锁；version 不匹配 → 409「存在更新的学期状态，请刷新」）。**不可逆**：切换时旧 active 自动归档，回退只能走受限的 `unarchive`。**重复激活已在 active 的学期 → 409**（即使空 body 也是 409，不是 400） |
+| POST | `/api/admin/semester/{id}/archive` | `semester:semester:activate` | 归档（数据只读保留，可查可导）。**二次门禁**：body 必须带 `version`（乐观锁，缺失 400）；学期窗口进行中（`window_status=open` 或 `channel_open=1`）时必须 `confirmWindowOpen=true`，否则 409 并说明「归档即全站停摆」。**不可逆**：归档后不能再次激活（重复激活 409），前端确认弹窗须写明「此操作不可撤销」 |
+| POST | `/api/admin/semester/{id}/unarchive` | `semester:semester:activate` | **撤销归档（受限回滚）**：body `{version, confirm:true}` 均必填。仅当**当前没有任何 active 学期**（误归档现场）时可用，否则 409；窗口保持 `closed`（需手动重新开启，不随回滚恢复填报） |
 | PUT | `/api/admin/semester/{id}/window` | `semester:window:manage` | 设置窗口起止 + auto 开关（`windowStart < windowEnd`） |
 | POST | `/api/admin/semester/{id}/window/open` | `semester:window:manage` | 手动开启 |
 | POST | `/api/admin/semester/{id}/window/close` | `semester:window:manage` | 提前截止 |
@@ -268,9 +269,23 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 { "version": 0 }   // 取 GET /api/admin/semester/{id} 返回的 version 原样回传
 ```
 
+**POST /api/admin/semester/{id}/archive**（二次门禁，B11）
+
+```json
+{ "version": 3, "confirmWindowOpen": true }   // version 必填；窗口进行中时 confirmWindowOpen 必须为 true
+```
+
+**POST /api/admin/semester/{id}/unarchive**（撤销归档 / 受限回滚，B15）
+
+```json
+{ "version": 4, "confirm": true }   // 两者都必填；仅当当前无 active 学期时可回滚，窗口保持 closed
+```
+
 > 窗口行为：`autoOpen=1` 且到点自动开启；`autoClose=1` 且到点自动截止；置 0 则到点不动（保留手动控制）。每次变更自动创建/合并系统通知任务并写审计。
 >
-> **学期切换不可逆（前端务必在确认弹窗写明）**：`activate` 会归档旧 active 学期，`archive` 会把当前 active 学期置为只读——两者都没有回退接口，`archived` 学期不能再被激活（返回 409「归档不可逆」）。因此**不要用真实学期的 activate/archive 做冒烟**（把种子学期归档后只能由 DBA 改库恢复）；这类验证请用可重建库的环境（`scripts/e2e-smoke.sh` 自带）。
+> **学期切换不可逆（前端务必在确认弹窗写明）**：`activate` 会归档旧 active 学期，`archive` 会把当前 active 学期置为只读——`archived` 学期不能再被激活（返回 409）。误归档的唯一回退是 `unarchive`，且要求当前没有 active 学期（即业务已停摆），窗口仍需手动重新开启。
+>
+> **归档有二次门禁**：`archive` 必须带 `version`；窗口进行中时必须显式 `confirmWindowOpen=true`。**不要用真实学期的 activate/archive 做冒烟**（归档会立刻停掉全站征订业务）；这类验证请用可重建库的环境（`scripts/e2e-smoke.sh` 自带）。
 
 ### 3.3 组织三表（9）
 
@@ -317,7 +332,8 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | POST | `/api/admin/user` | `user:account:manage` | 建号（含供货商）：`{userNo, name, phone?, collegeId?, classId?, roleCodes:["TEACHER"]}`；初始密码 = 学号/工号后 6 位，首次登录须校验+改密 |
 | PUT | `/api/admin/user/{id}/status` | `user:account:manage` | `?status=0|1` 停用/启用（停用即时踢下线） |
 | PUT | `/api/admin/user/{id}/reset-password` | `user:account:reset` | 重置为初始密码规则 + 强制改密 |
-| POST | `/api/admin/user/import` | `people:student:import` / `people:teacher:import` | 名单导入：`?role=student|teacher&semesterId=`（默认 active 学期）+ multipart `file` → `{batchId}` |
+| POST | `/api/admin/user/import` | `people:student:import` / `people:teacher:import` | 名单导入：`?role=student|teacher&semesterId=`（默认 active 学期）+ multipart `file` → `{batchId}`。**局部名单门禁**：学生名单若把某班人数下调超阈值（默认比例 > 20% 且 ≥ 5 人）→ 409 并回显逐班 diff，须带 `&confirmClassSizeShrink=true` 重提 |
+| POST | `/api/admin/user/import/preview` | 同上 | **导入预览（只读，不落库不建批次）**：同一 multipart 入参，返回班级人数 diff / 将新建账号数 / 将停用账号数 / 错误行样例（见下） |
 | GET | `/api/admin/user/import/template` | 同上 | `?role=student|teacher` 模板下载（学生：学号/姓名/学院/专业/班级/手机号；教师：工号/姓名/学院/手机号） |
 
 ### 3.6 教师征订（教师端 5 + 复核端 4）
@@ -411,7 +427,12 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 
 > 停用比对（W14）：名单导入只比对**本次文件覆盖范围**（文件内学院 + 对应角色）内缺席的账号并停用，范围外账号不受影响；结果摘要（停用数量等）写入审计。
 >
-> **班级人数（W2）以名单为准**：学生名单导入会把文件内每个班级的 `school_class.studentCount` 重算为「该班在文件中的**去重学生数**」（同一学号多行只算 1 人），它是教师征订数量上限的来源。因此**局部名单会把上限改小**（文件里只放 1 行 → 上限变 1，教师填报会被 `QTY_RANGE` 拦住）。导入摘要的 `classSizeUpdates`/`classSizeShrinks` 会记录重算与下调规模（下调另记 WARN 日志），必要时用 `PUT /api/admin/class/{id}` 的 `studentCount` 手工修正。
+> **班级人数（W2）以名单为准 + 局部名单门禁（B13）**：学生名单导入会把文件内每个班级的 `school_class.studentCount` 重算为「该班在文件中的**去重学生数**」（同一学号多行只算 1 人），它是教师征订数量上限的来源。**局部名单会把上限改小**（文件里只放 2 行 → 上限变 2，教师填报被 `QTY_RANGE` 拦住），因此：
+>
+> - 下调幅度**比例 > `textbook.import.class-size-shrink-confirm-pct`（默认 20%）且绝对人数 ≥ `class-size-shrink-confirm-min-drop`（默认 5）**时，导入**直接 409 `STATE_CONFLICT`**（不建批次、不改人数），message 回显「班级（学院/专业）50 → 2（-48，96%）」这样的逐班 diff；确认无误后带 `confirmClassSizeShrink=true` 重提即可。小班的小幅调整（如 2 → 1）不触发门禁。
+> - 管理员可先调 **`POST /api/admin/user/import/preview`**（同 multipart 入参）预览，不落库、不建批次，返回：`{totalRows, okRows, errorRows, errorSamples[], newUserCount, disableComparisonApplies, disableEstimate, classSizeDiffs[], requiresConfirm, shrinkConfirmPct, shrinkConfirmMinDrop}`；`classSizeDiffs[]` 每项为 `{classId, className, majorName, collegeName, currentCount, incomingCount, drop, dropPct, requiresConfirm}`。
+> - 导入摘要的 `classSizeUpdates`/`classSizeShrinks`/`classSizeShrinkConfirmed` 记录重算规模、下调班级数与是否已确认（下调另记 WARN 日志），必要时用 `PUT /api/admin/class/{id}` 的 `studentCount` 手工修正。
+> - **耗时口径**：未确认的学生导入会在请求线程上做一次只读扫描（真库实测 ≈1.3ms/行，10k 行约 13s；同批次异步导入约 5 分钟）；带 `confirmClassSizeShrink=true`（前端预览确认后的正常路径）时完全跳过扫描（实测请求 311ms）。
 
 ### 3.10 导出中心（4 + 任务 2）
 
@@ -574,3 +595,4 @@ POST /api/admin/export/orders  {"semesterId":1}
 | 2026-09-22 | 契约修复（V1.0.5） | ③ **供货商导出异步受理体补齐 `async`/`rowEstimate`**（此前只有 `{taskId}`，与 §3.10 其余四类不一致，前端只能靠 Content-Type 分流）。④ **供货商任务物理隔离补齐**：内部端点 `/api/export-task/{id}` 对 `bizType=supplier` 任务返回 404（非 ADMIN），隔离变为双向（ADMIN 例外以便排障）。⑤ `reviewed` 终态文案修正：教师重提不再引导「联系教材室驳回后补正」（该路径不存在——教材室对 `reviewed` 再审核同样 409），改为如实说明终态；管理员重复审核文案由「请刷新后重试」改为「已通过审核（终态），不能再次审核」。⑥ 学期 `activate`/`archive` 明确不可逆（归档后不能再次激活，文案含「归档不可逆」）。 |
 | 2026-09-22 | 语义明确（V1.0.5） | ⑦ **班级人数（W2）以名单为准**：学生名单导入把 `school_class.studentCount` 重算为文件内该班**去重**学生数（此前按行数计数，同学号重复行会放大上限）；导入摘要新增 `classSizeUpdates`/`classSizeShrinks` 并下调时记 WARN——局部名单会把教师数量上限改小，需人工确认是否用 `PUT /api/admin/class/{id}` 修正。 |
 | 2026-09-22 | 上线前复审修复（V1.0.6） | ① **窗口变更重置轮次撞唯一键**：`onWindowChange` 的逻辑删除语句漏 `deleted=0`，第二次窗口变更（重发之后）会撞 `uk_notice_round` → 整个变更事务回滚，自动截止每分钟重试每分钟失败，**窗口再也关不上**（延长/提前截止同样失败）。② **教师提交与审核并发**：提交侧只有「读后判断」，与审核并发时会把 `reviewed` 静默改回 `pending_review`（审批结论被撤销，audit_log 却留着已审核）——提交事务内改为对该表单行加锁并重读状态（`selectByIdForUpdate`）。③ **编辑学期基本信息回写整实体**：会把 `window_status/channel_open/version/active_status` 按旧快照写回（窗口被静默重开、version 回退；极端情况把已激活学期写回 draft → 全站无 active 学期），改为只写请求字段。④ **首登 wxCode 分支可接管账号**：wxCode 换来的 openid 原直接绑定并置已验证，未与已有 openid 比对——改为「只校验已绑定 openid，绑定仅发生在手机号后 4 位通过之后」。⑤ **重置密码不清 `first_login_verified`**：重置后（口令回到学号后 6 位）可跳过首登校验直接改密，已一并清零。⑥ **draft 学期名单导入全局停用账号**：停用比对候选集来自 `sys_user.college_id`（active 学期冗余列），对 draft 学期导入会把 active 在册的人误停用；现仅在「目标学期 = active 学期」时执行。⑦ 可信代理配置绑定修复（`TEXTBOOK_TRUSTED_PROXIES` 此前无占位符，配了不生效，审计 IP 恒为 127.0.0.1）。⑧ 通知任务合并时 `target_roles` 取并集（此前合并进手动 STUDENT-only 任务后，教师/秘书收不到窗口变更通知）。⑨ `local` profile 连非本机库直接拒绝启动；定时任务线程池 1 → 3（通知重发不再阻塞窗口引擎）。 |
+| 2026-09-23 | 生产缺陷修复（V1.0.7） | ① **archive 无门禁（P1）**：`POST /api/admin/semester/{id}/archive` 此前不读 body、无任何确认，线上一次空 body 调用即把进行中的学期归档——归档后全站没有 active 学期，学生选购/教师填报/导出统一报「当前没有激活学期」，业务停摆且只能整库备份恢复。现要求 body 带 `version`（乐观锁，缺失 400），且学期窗口进行中（`window_status=open` 或 `channel_open=1`）时必须 `confirmWindowOpen=true`，否则 409 并说明影响；归档同时 `version+1`（否则归档前后 version 相同，乐观锁形同虚设）。② **撤销归档（受限回滚，P2）**：新增 `POST /api/admin/semester/{id}/unarchive`，仅在「当前无任何 active 学期」（误归档现场）时允许，需 `version` + `confirm=true`；窗口保持 closed，须手动重开。③ **重复 activate 语义修正（P2）**：空 body 调 activate 此前在反序列化阶段就 400（`@RequestBody` 必填），把「该学期已是激活学期」的 409 掩盖成参数错误；现 body 改为可选、校验顺序为「先状态后参数」，并区分 archived（409，指向 unarchive）与 active（409「已是激活学期」）。④ **局部名单防护（P1）**：学生名单导入按文件内人数重算班级人数（教师填报数量上限），下调比例 > 20% 且 ≥ 5 人时视为疑似局部名单，导入直接 409（不建批次、不改人数）并回显逐班 diff，须带 `confirmClassSizeShrink=true` 重提；新增只读预览 `POST /api/admin/user/import/preview`（班级人数 diff / 将新建账号数 / 将停用账号数 / 错误样例），导入摘要补 `classSizeShrinkConfirmed`。⑤ **时间入参口径补全（P2）**：`PUT /api/admin/semester/{id}` 的 body 与窗口接口一致（ISO 与空格都接受，出参恒为 ISO）——此前「body 空格一律 400」的记录是 TimeFormatConfig 上线前的旧行为；`LocalDate` 字段（`startDate`/`endDate`）同样容忍带时间的写法并按日期取值，非法值仍 400 且提示 `yyyy-MM-dd`。⑥ 新增 `db/cleanup-seed-accounts.sql`：联调后一次性停用 18 个公开口令种子账号（幂等、附校验 SQL），部署手册同步。 |
