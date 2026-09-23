@@ -3,12 +3,34 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.tian.textbook.notify.mapper.NoticeRecordMapper">
 
+    <!--
+      主表 ∪ 历史表（BE-5d）：学期归档后记录迁入 notice_record_history，管理侧的
+      进度/失败名单/导出必须两表都能读到（同一 taskId 不会同时存在于两处，除非迁移中断，
+      UNION ALL 正好覆盖两种情形）。历史表没有生成列 confirm_flag，故显式列出所需列。
+    -->
+    <sql id="recordUnion">
+        SELECT task_id, user_id, round_no, sent_at, send_status, confirmed_at
+        FROM notice_record
+        WHERE task_id = #{taskId} AND deleted = 0
+        UNION ALL
+        SELECT task_id, user_id, round_no, sent_at, send_status, confirmed_at
+        FROM notice_record_history
+        WHERE task_id = #{taskId} AND deleted = 0
+    </sql>
+
+    <!-- 确认记录的存在性判定（主表 ∪ 历史表） -->
+    <sql id="confirmUnion">
+        SELECT task_id, user_id, confirmed_at, deleted FROM notice_record
+        UNION ALL
+        SELECT task_id, user_id, confirmed_at, deleted FROM notice_record_history
+    </sql>
+
     <!-- 任务进度：按 send_status 统计发送尝试人数 + 已确认人数 -->
     <select id="countProgressByTask" resultType="java.util.Map">
-        SELECT send_status AS sendStatus, COUNT(DISTINCT user_id) AS userCount
-        FROM notice_record
-        WHERE task_id = #{taskId} AND deleted = 0 AND send_status IS NOT NULL
-        GROUP BY send_status
+        SELECT nr.send_status AS sendStatus, COUNT(DISTINCT nr.user_id) AS userCount
+        FROM (<include refid="recordUnion"/>) nr
+        WHERE nr.send_status IS NOT NULL
+        GROUP BY nr.send_status
     </select>
 
     <!-- 未授权/失败名单（最后一轮状态为 unauthorized/failed 且未确认的用户） -->
@@ -18,16 +40,15 @@
                p.college_id AS collegeId, c.name AS collegeName,
                p.class_id AS classId, sc.name AS className,
                nr.send_status AS sendStatus, nr.round_no AS roundNo, nr.sent_at AS sentAt
-        FROM notice_record nr
+        FROM (<include refid="recordUnion"/>) nr
         JOIN sys_user u ON u.id = nr.user_id AND u.deleted = 0
         LEFT JOIN sys_user_role ur ON ur.user_id = u.id AND ur.deleted = 0
         LEFT JOIN sys_role r ON r.id = ur.role_id AND r.deleted = 0
         LEFT JOIN user_semester_profile p ON p.user_id = u.id AND p.semester_id = #{semesterId} AND p.deleted = 0
         LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
         LEFT JOIN school_class sc ON sc.id = p.class_id AND sc.deleted = 0
-        WHERE nr.task_id = #{taskId} AND nr.deleted = 0
-          AND nr.send_status IN ('unauthorized', 'failed')
-          AND NOT EXISTS (SELECT 1 FROM notice_record c2
+        WHERE nr.send_status IN ('unauthorized', 'failed')
+          AND NOT EXISTS (SELECT 1 FROM (<include refid="confirmUnion"/>) c2
                           WHERE c2.task_id = nr.task_id AND c2.user_id = nr.user_id
                             AND c2.confirmed_at IS NOT NULL AND c2.deleted = 0)
         ORDER BY nr.sent_at DESC
@@ -35,10 +56,9 @@
     </select>
 
     <select id="countFailures" resultType="long">
-        SELECT COUNT(1) FROM notice_record nr
-        WHERE nr.task_id = #{taskId} AND nr.deleted = 0
-          AND nr.send_status IN ('unauthorized', 'failed')
-          AND NOT EXISTS (SELECT 1 FROM notice_record c2
+        SELECT COUNT(1) FROM (<include refid="recordUnion"/>) nr
+        WHERE nr.send_status IN ('unauthorized', 'failed')
+          AND NOT EXISTS (SELECT 1 FROM (<include refid="confirmUnion"/>) c2
                           WHERE c2.task_id = nr.task_id AND c2.user_id = nr.user_id
                             AND c2.confirmed_at IS NOT NULL AND c2.deleted = 0)
     </select>
@@ -50,23 +70,21 @@
                p.college_id AS collegeId, c.name AS collegeName,
                p.class_id AS classId, sc.name AS className,
                nr.round_no AS roundNo, nr.sent_at AS sentAt, nr.send_status AS sendStatus,
-               (SELECT MAX(c3.confirmed_at) FROM notice_record c3
+               (SELECT MAX(c3.confirmed_at) FROM (<include refid="confirmUnion"/>) c3
                  WHERE c3.task_id = nr.task_id AND c3.user_id = nr.user_id
                    AND c3.confirmed_at IS NOT NULL AND c3.deleted = 0) AS confirmedAt
-        FROM notice_record nr
+        FROM (<include refid="recordUnion"/>) nr
         JOIN sys_user u ON u.id = nr.user_id AND u.deleted = 0
         LEFT JOIN sys_user_role ur ON ur.user_id = u.id AND ur.deleted = 0
         LEFT JOIN sys_role r ON r.id = ur.role_id AND r.deleted = 0
         LEFT JOIN user_semester_profile p ON p.user_id = u.id AND p.semester_id = #{semesterId} AND p.deleted = 0
         LEFT JOIN college c ON c.id = p.college_id AND c.deleted = 0
         LEFT JOIN school_class sc ON sc.id = p.class_id AND sc.deleted = 0
-        WHERE nr.task_id = #{taskId} AND nr.deleted = 0
         ORDER BY nr.user_id, nr.round_no
     </select>
 
     <!-- 与 selectTaskSummaryRows 同口径的 COUNT（导出阈值判定用，避免为比较一次阈值物化全量结果） -->
     <select id="countTaskSummaryRows" resultType="long">
-        SELECT COUNT(1) FROM notice_record nr
-        WHERE nr.task_id = #{taskId} AND nr.deleted = 0
+        SELECT COUNT(1) FROM (<include refid="recordUnion"/>) nr
     </select>
 </mapper>

@@ -113,7 +113,38 @@ class ImportUploadHttpIntegrationTest {
         assertThat(body(response).get("code")).isEqualTo("FILE_TYPE_INVALID");
     }
 
+    @Test
+    @DisplayName("BE-7c：异动模板下载端点返回 6 列表头 xlsx（学号/工号、异动对象、目标学院、目标班级、原因、异动类型）")
+    void changeTemplate_returnsSixColumnXlsx() {
+        String token = adminToken();
+
+        ResponseEntity<byte[]> response = restTemplate.exchange(
+                "/api/secretary/change/template", HttpMethod.GET,
+                new HttpEntity<>(bearerHeaders(token)), byte[].class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // 文件名按 RFC 5987 编码（filename*=UTF-8''...），此处只断言扩展名与 filename 段
+        assertThat(String.valueOf(response.getHeaders().getFirst("Content-Disposition")))
+                .contains("filename")
+                .contains(".xlsx");
+        byte[] content = response.getBody();
+        assertThat(content).isNotNull().isNotEmpty();
+        // 表头断言（模板只写表头、不写示例行）
+        // headRowNumber(0)：把表头行也当作数据行读回来（模板只有表头、没有示例行）
+        List<Map<Integer, String>> head = EasyExcel.read(new java.io.ByteArrayInputStream(content))
+                .headRowNumber(0).sheet().doReadSync();
+        assertThat(head).as("模板只有表头行").hasSize(1);
+        assertThat(head.get(0).values()).containsExactly(
+                "学号/工号", "异动对象", "目标学院", "目标班级", "原因", "异动类型");
+    }
+
     // ============ 私有 ============
+
+    private HttpHeaders bearerHeaders(String token) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        return headers;
+    }
 
     private Semester seedOrgAndSemester() {
         var college = seeder.college("计算机学院");

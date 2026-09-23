@@ -15,8 +15,14 @@ public class ChangeRequestListItem {
 
     private Long semesterId;
 
-    /** student/teacher */
+    /** student/teacher（异动对象） */
     private String type;
+
+    /** 异动类型（MAJOR_TRANSFER/GRADE_REPEAT/UPGRADE/OTHER；历史数据为 null） */
+    private String changeType;
+
+    /** 异动类型中文（转专业/留级/专升本/其他；null → 未分类） */
+    private String changeTypeLabel;
 
     private Long targetUserId;
 

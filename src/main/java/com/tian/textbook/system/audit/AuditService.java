@@ -37,6 +37,10 @@ public class AuditService {
     public static final String CONFIG = "CONFIG";
     public static final String IMPORT = "IMPORT";
     public static final String NOTICE = "NOTICE";
+    /** 角色/权限变更（BE-2：新建/编辑/删除角色、角色-权限分配） */
+    public static final String ROLE = "ROLE";
+    /** 教师主动撤回征订单（BE-4） */
+    public static final String WITHDRAW = "WITHDRAW";
 
     private final AuditLogMapper auditLogMapper;
 

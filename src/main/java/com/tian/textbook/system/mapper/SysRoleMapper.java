@@ -22,4 +22,8 @@ public interface SysRoleMapper extends BaseMapper<SysRole> {
             + "JOIN sys_role_permission rp ON rp.perm_id = p.id "
             + "WHERE rp.role_id = #{roleId} AND rp.deleted = 0 AND p.deleted = 0")
     List<String> selectPermCodesByRole(@Param("roleId") Long roleId);
+
+    /** 全部角色（按 sort 升序；角色配置页用，BE-2） */
+    @Select("SELECT * FROM sys_role WHERE deleted = 0 ORDER BY sort, id")
+    List<SysRole> selectAllActive();
 }

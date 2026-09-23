@@ -14,8 +14,15 @@ import java.util.List;
 /**
  * 教师征订单（order_form，一人一学期一单，W9 唯一约束）。
  *
- * <p>状态机：draft → submitted →（字段审查）rejected_auto / pending_review →（超管审核）
- * reviewed / rejected（rejected 可补正重提，关窗后 7 天内仍可补正，W4）。</p>
+ * <p>状态机（BE-4 起为唯一真源，与 db/schema.sql 注释同步）：</p>
+ * <pre>
+ * draft ──提交──▶ pending_review ──审核通过──▶ reviewed（终态）
+ *   ▲                   │
+ *   └──────撤回─────────┘
+ *                       └──审核驳回──▶ rejected ──补正重提──▶ pending_review
+ * 字段审查不过 ──▶ rejected_auto ──补正重提──▶ pending_review
+ * </pre>
+ * <p>{@code submitted} 为历史死值（无代码写入，BE-8 起从注释与字典移除）。</p>
  */
 @Data
 @TableName(value = "order_form", autoResultMap = true)
@@ -46,6 +53,9 @@ public class OrderForm {
 
     /** 补正截止（关窗后 order.correct_window_days 天，W4） */
     private LocalDateTime correctDeadline;
+
+    /** 最近一次主动撤回时间（BE-4：教师在管理员审核前撤回修改） */
+    private LocalDateTime withdrawnAt;
 
     /**
      * 内容版本（每次教师提交/补正整单覆盖后 +1）。

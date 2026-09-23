@@ -23,7 +23,7 @@ public class AdminChangeRequestController {
 
     private final ChangeRequestService changeRequestService;
 
-    /** 审批列表（semesterId/status/batchNo/type 过滤，分页） */
+    /** 审批列表（semesterId/status/batchNo/type/changeType 过滤，分页；BE-7a 新增 changeType 筛选） */
     @GetMapping
     @PreAuthorize("hasAuthority('change:request:review')")
     public ApiResponse<PageResponse<ChangeRequestListItem>> page(
@@ -31,9 +31,10 @@ public class AdminChangeRequestController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String batchNo,
             @RequestParam(required = false) String type,
+            @RequestParam(required = false) String changeType,
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "20") long size) {
-        return ApiResponse.ok(changeRequestService.page(semesterId, status, batchNo, type, page, size));
+        return ApiResponse.ok(changeRequestService.page(semesterId, status, batchNo, type, changeType, page, size));
     }
 
     /** 单条审批（pass/reject，reject 理由必填；仅 pending_review 可审） */

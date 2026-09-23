@@ -15,7 +15,9 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -118,6 +120,40 @@ class MigrationScriptTest extends IntegrationTestBase {
             assertThat(schema)
                     .as("schema.sql 中缺少索引 %s（两边命名漂移）", index)
                     .contains(index);
+        }
+    }
+
+    @Test
+    @DisplayName("R2：2026-09-23 四个迁移脚本齐备、幂等守卫齐备、目标对象不漏")
+    void migrationScripts20260923_coverRequiredObjects() throws IOException {
+        // 脚本 → 必须出现的目标对象（列/表/权限码）与幂等守卫
+        Map<String, List<String>> expectations = new LinkedHashMap<>();
+        expectations.put("db/migration-2026-09-23-role-permission.sql",
+                List.of("role:manage", "role:permission:assign", "ON DUPLICATE KEY UPDATE"));
+        expectations.put("db/migration-2026-09-23-order-withdraw.sql",
+                List.of("withdrawn_at", "information_schema.COLUMNS"));
+        expectations.put("db/migration-2026-09-23-notify.sql",
+                List.of("semester_id", "notice_record_history", "change_type", "uk_history_record",
+                        "information_schema.COLUMNS", "information_schema.TABLES"));
+        expectations.put("db/migration-2026-09-23-reserve.sql",
+                List.of("reserve1", "reserve6", "information_schema.COLUMNS"));
+        for (Map.Entry<String, List<String>> entry : expectations.entrySet()) {
+            String sql = readClasspath(entry.getKey()).toLowerCase(java.util.Locale.ROOT);
+            for (String needle : entry.getValue()) {
+                assertThat(sql)
+                        .as("%s 应包含 %s（缺则存量库升级后对应功能 500 或结构漂移）",
+                                entry.getKey(), needle)
+                        .contains(needle.toLowerCase(java.util.Locale.ROOT));
+            }
+        }
+        // 22 张表 × 6 列：reserve 迁移必须覆盖每一张（逐个表名出现即可，逐列由 MySQL 用例实测）
+        String reserve = readClasspath("db/migration-2026-09-23-reserve.sql");
+        for (String table : List.of("sys_user_token", "sys_role", "sys_permission", "sys_user_role",
+                "sys_role_permission", "major", "school_class", "semester", "user_semester_profile",
+                "course", "teacher_course", "order_form", "order_form_item", "student_order",
+                "student_order_item", "change_request", "import_batch", "export_task", "notice_task",
+                "notice_record", "system_config", "audit_log")) {
+            assertThat(reserve).as("reserve 迁移缺少表 %s", table).contains("TABLE_NAME = '" + table + "'");
         }
     }
 

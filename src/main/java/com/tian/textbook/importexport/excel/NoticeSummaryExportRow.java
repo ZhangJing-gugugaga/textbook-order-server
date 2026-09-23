@@ -39,6 +39,10 @@ public class NoticeSummaryExportRow {
     @ExcelProperty("班级")
     private String className;
 
+    /** 渠道（BE-5f / D4 口径）：订阅消息+弹窗 / 仅弹窗（未授权）/ 仅弹窗 */
+    @ExcelProperty("渠道")
+    private String channel;
+
     @ExcelProperty("第1轮发送时间")
     private String round1SentAt;
 
@@ -75,9 +79,10 @@ public class NoticeSummaryExportRow {
     @ExcelProperty("确认时间")
     private String confirmedAt;
 
-    /** 按 user 透视结果构造一行 */
+    /** 按 user 透视结果构造一行（channel = 渠道列，BE-5f） */
     public static NoticeSummaryExportRow of(String userNo, String name, String role,
                                             String collegeName, String className,
+                                            String channel,
                                             Map<Integer, Round> rounds,
                                             LocalDateTime confirmedAt) {
         NoticeSummaryExportRow row = new NoticeSummaryExportRow();
@@ -86,6 +91,7 @@ public class NoticeSummaryExportRow {
         row.role = blankToEmpty(role);
         row.collegeName = blankToEmpty(collegeName);
         row.className = blankToEmpty(className);
+        row.channel = blankToEmpty(channel);
         row.round1SentAt = sentAt(rounds, 1);
         row.round1Status = status(rounds, 1);
         row.round2SentAt = sentAt(rounds, 2);

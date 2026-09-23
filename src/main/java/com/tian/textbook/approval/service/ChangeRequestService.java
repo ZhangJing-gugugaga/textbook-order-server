@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tian.textbook.approval.ChangeTypes;
 import com.tian.textbook.approval.dto.ChangeBatchReviewRequest;
 import com.tian.textbook.approval.dto.ChangeBatchReviewResult;
 import com.tian.textbook.approval.dto.ChangeImportResult;
@@ -103,6 +104,8 @@ public class ChangeRequestService {
     private static final int MAX_BATCH_REVIEW = 500;
 
     private final ChangeRequestMapper changeRequestMapper;
+    /** 字段审查与记录构建（与异步导入共用，BE-7b 抽取） */
+    private final ChangeRecordSupport support;
     private final SysUserMapper userMapper;
     private final SysRoleMapper roleMapper;
     private final SysUserRoleMapper userRoleMapper;
@@ -133,14 +136,15 @@ public class ChangeRequestService {
         }
         String targetUserNo = trimToEmpty(request.targetUserNo());
         SysUser target = targetUserNo.isEmpty() ? null : userMapper.selectByUserNo(targetUserNo);
-        Belonging before = currentBelonging(target == null ? null : target.getId(), active.getId());
-        List<FieldCheckIssue> issues = fieldCheck(type, target, request.targetCollegeId(),
+        ChangeRecordSupport.Belonging before = support.currentBelonging(target == null ? null : target.getId(), active.getId());
+        List<FieldCheckIssue> issues = support.fieldCheck(type, target, request.targetCollegeId(),
                 request.targetClassId(), before.collegeId(), before.classId(), false);
-        issues = withScopeCheck(issues, type, target, before, current, active.getId());
+        issues = support.withScopeCheck(issues, type, target, before, current, active.getId());
 
-        ChangeRequest changeRequest = buildChangeRequest(active.getId(), current.userId(), type,
+        ChangeRequest changeRequest = support.buildChangeRequest(active.getId(), current.userId(), type,
                 target == null ? null : target.getId(), request.targetCollegeId(), request.targetClassId(),
-                before.collegeId(), before.classId(), issues, null, null);
+                before.collegeId(), before.classId(), issues, null, null,
+                ChangeTypes.parse(request.changeType()));
         changeRequestMapper.insert(changeRequest);
         if (issues.isEmpty()) {
             log.info("异动提交: applicant={}, targetUserNo={}, type={}, id={}",
@@ -150,108 +154,6 @@ public class ChangeRequestService {
                     current.userNo(), targetUserNo, issues.size());
         }
         return enrich(List.of(changeRequest)).get(0);
-    }
-
-    // ============ 批量导入（秘书，同步解析） ============
-
-    /**
-     * 批量导入异动（EasyExcel 同步解析，逐行字段审查，共享 batch_no）：
-     * 落 import_batch(biz_type=change, status=done) + 逐行 change_request。
-     */
-    @Transactional
-    public ChangeImportResult importRows(MultipartFile file) {
-        CurrentUser current = SecurityUtils.requireCurrentUser();
-        Semester active = requireActiveSemester();
-        validateFile(file);
-        List<ChangeImportRow> rows = readRows(file);
-
-        String batchNo = generateBatchNo();
-        ImportBatch batch = new ImportBatch();
-        batch.setBizType("change");
-        batch.setSemesterId(active.getId());
-        batch.setFileName(file.getOriginalFilename());
-        batch.setBatchNo(batchNo);
-        batch.setStatus("running");
-        batch.setTotal(0);
-        batch.setOkCount(0);
-        batch.setErrorCount(0);
-        batch.setProgressPct(0);
-        importBatchMapper.insert(batch);
-
-        int ok = 0;
-        int error = 0;
-        List<Map<String, Object>> errorDetail = new ArrayList<>();
-        for (int i = 0; i < rows.size(); i++) {
-            ChangeImportRow row = rows.get(i);
-            if (isBlankRow(row)) {
-                continue;
-            }
-            int rowNo = i + 2; // 第 1 行为表头
-            String type = normalizeImportType(row.getType());
-            SysUser target = blank(row.getUserNo()) ? null : userMapper.selectByUserNo(row.getUserNo().trim());
-            Belonging before = currentBelonging(target == null ? null : target.getId(), active.getId());
-
-            Long collegeId = null;
-            if (!blank(row.getCollegeName())) {
-                College college = collegeMapper.selectByName(row.getCollegeName().trim());
-                collegeId = college == null ? null : college.getId();
-            }
-            boolean classAmbiguous = false;
-            Long classId = null;
-            if (!blank(row.getClassName())) {
-                List<SchoolClass> matches = classMapper.selectList(Wrappers.<SchoolClass>lambdaQuery()
-                        .eq(SchoolClass::getName, row.getClassName().trim())
-                        .eq(SchoolClass::getDeleted, 0));
-                if (matches.size() == 1) {
-                    classId = matches.get(0).getId();
-                } else if (matches.size() > 1) {
-                    classAmbiguous = true; // 同名班级跨专业/学院存在，严格模式视为行错误
-                }
-            }
-
-            List<FieldCheckIssue> issues = fieldCheck(type, target, collegeId, classId,
-                    before.collegeId(), before.classId(), classAmbiguous);
-            issues = withScopeCheck(issues, type, target, before, current, active.getId());
-            if (TYPE_TEACHER.equals(type) && !blank(row.getClassName())) {
-                // 与逐条提交的 400 对齐：教师异动仅支持变更学院
-                issues = new ArrayList<>(issues);
-                issues.add(new FieldCheckIssue("targetClassId", "CLASS_EXISTS", "教师异动仅支持变更学院"));
-            }
-
-            ChangeRequest changeRequest = buildChangeRequest(active.getId(), current.userId(), type,
-                    target == null ? null : target.getId(), collegeId, classId,
-                    before.collegeId(), before.classId(), issues, batchNo, row.getReason());
-            changeRequestMapper.insert(changeRequest);
-            if (issues.isEmpty()) {
-                ok++;
-            } else {
-                error++;
-                if (errorDetail.size() < MAX_IMPORT_ERROR_DETAIL) {
-                    errorDetail.add(rowErrorDetail(rowNo, row.getUserNo(), issues));
-                }
-            }
-        }
-
-        int total = ok + error;
-        batch.setTotal(total);
-        batch.setOkCount(ok);
-        batch.setErrorCount(error);
-        batch.setProgressPct(100);
-        batch.setStatus("done");
-        if (!errorDetail.isEmpty()) {
-            batch.setErrorDetail(errorDetail);
-        }
-        importBatchMapper.updateById(batch);
-        log.info("异动批量导入完成: batchNo={}, batchId={}, total={}, ok={}, error={}, applicant={}",
-                batchNo, batch.getId(), total, ok, error, current.userNo());
-
-        ChangeImportResult result = new ChangeImportResult();
-        result.setBatchId(batch.getId());
-        result.setBatchNo(batchNo);
-        result.setTotal(total);
-        result.setOkCount(ok);
-        result.setErrorCount(error);
-        return result;
     }
 
     // ============ 我的提交记录 ============
@@ -294,14 +196,18 @@ public class ChangeRequestService {
     /** 审批列表分页（semesterId/status/batchNo/type 过滤） */
     @Transactional(readOnly = true)
     public PageResponse<ChangeRequestListItem> page(Long semesterId, String status, String batchNo, String type,
-                                                    long page, long size) {
+                                                    String changeType, long page, long size) {
         long safeSize = PageResponse.normalizeSize(size);
         long safePage = PageResponse.normalizePage(page);
         long offset = (safePage - 1) * safeSize;
+        String safeChangeType = trimToEmpty(changeType);
         List<ChangeRequestListItem> list = changeRequestMapper.selectPageByFilter(
-                semesterId, trimToEmpty(status), trimToEmpty(batchNo), trimToEmpty(type), offset, safeSize);
+                semesterId, trimToEmpty(status), trimToEmpty(batchNo), trimToEmpty(type),
+                safeChangeType, offset, safeSize);
+        // 异动类型中文回填（历史数据 change_type 为 NULL → 前端展示「未分类」）
+        list.forEach(item -> item.setChangeTypeLabel(ChangeTypes.labelOf(item.getChangeType())));
         long total = changeRequestMapper.countByFilter(
-                semesterId, trimToEmpty(status), trimToEmpty(batchNo), trimToEmpty(type));
+                semesterId, trimToEmpty(status), trimToEmpty(batchNo), trimToEmpty(type), safeChangeType);
         return PageResponse.of(list, safePage, safeSize, total);
     }
 
@@ -413,228 +319,6 @@ public class ChangeRequestService {
         auditService.record(AuditService.CHANGE, "change", String.valueOf(id),
                 Map.of("action", action, "targetUserId", String.valueOf(changeRequest.getTargetUserId())));
     }
-
-    /**
-     * 生效落库（W15）：upsert <b>该异动所属学期</b>的 user_semester_profile，
-     * 并在该学期仍是 active 学期时同步 sys_user 冗余列 college_id/class_id
-     * （SPEC §7：冗余列由 profile 同步）。
-     * teacher 仅更新 college_id（class_id 保持原值，MP 非空字段更新策略天然跳过 null）。
-     *
-     * <p>两个历史缺陷在此修正：</p>
-     * <ul>
-     *   <li><b>学期来源</b>：原实现用 {@code requireActiveSemester()}。异动单提交后管理员
-     *       切换学期（常规操作，待审记录会跨切换留存）再审批，归属就被写进新学期，
-     *       旧学期归属保持陈旧、新学期归属被凭空写入。现改为 {@code changeRequest.getSemesterId()}；</li>
-     *   <li><b>清空归属</b>：payload 解析失败时 after.collegeId 为 null，原实现直接
-     *       {@code set(collegeId, null)} 把用户 college_id 置空（MyBatis-Plus 两参 set 无条件写 NULL），
-     *       叠加 CollegeScopeHandler 的 {@code 1 = 0} 使该用户此后查不到任何数据。
-     *       现改为校验失败即抛异常终止审批。</li>
-     * </ul>
-     *
-     * <p>注意：/api/me 与 /api/admin/user 读的是 sys_user 冗余列，若只写 profile，
-     * 审批通过后这些接口会一直回显异动前的学院/班级（本方法两处同写，避免归属不一致）。</p>
-     */
-    private void applyToProfile(ChangeRequest changeRequest) {
-        Long semesterId = changeRequest.getSemesterId();
-        if (semesterId == null) {
-            throw new BizException(ErrorCode.BIZ_ERROR, "异动记录缺少所属学期，无法生效，请驳回后重新提交");
-        }
-        if (semesterMapper.selectByIdSoft(semesterId) == null) {
-            throw new BizException(ErrorCode.NOT_FOUND, "异动所属学期不存在，无法生效");
-        }
-        Belonging after = readBelonging(changeRequest.getPayloadJson(), "after");
-        boolean isStudent = TYPE_STUDENT.equals(changeRequest.getType());
-        if (after.collegeId() == null) {
-            throw new BizException(ErrorCode.BIZ_ERROR, "异动目标学院缺失（payload 解析失败），无法生效，请驳回后重新提交");
-        }
-        if (isStudent && after.classId() == null) {
-            throw new BizException(ErrorCode.BIZ_ERROR, "异动目标班级缺失（payload 解析失败），无法生效，请驳回后重新提交");
-        }
-        Long targetUserId = changeRequest.getTargetUserId();
-        UserSemesterProfile existing = profileMapper.selectByUserAndSemester(targetUserId, semesterId);
-        if (existing == null) {
-            UserSemesterProfile profile = new UserSemesterProfile();
-            profile.setUserId(targetUserId);
-            profile.setSemesterId(semesterId);
-            profile.setCollegeId(after.collegeId());
-            profile.setClassId(isStudent ? after.classId() : null);
-            profile.setStatus(1);
-            profile.setDeleted(0L);
-            profileMapper.insert(profile);
-        } else {
-            UserSemesterProfile update = new UserSemesterProfile();
-            update.setId(existing.getId());
-            update.setCollegeId(after.collegeId());
-            if (isStudent) {
-                update.setClassId(after.classId());
-            }
-            profileMapper.update(update, Wrappers.<UserSemesterProfile>lambdaUpdate()
-                    .eq(UserSemesterProfile::getId, existing.getId()));
-        }
-        // sys_user 冗余列只描述「当前 active 学期归属」：异动所属学期已不是 active 时
-        // 写它会污染当前学期的显示（旧学期归属改完，新学期界面跟着变）。
-        if (semesterId.equals(activeSemesterService.activeId())) {
-            syncRedundantColumns(targetUserId, after.collegeId(), isStudent ? after.classId() : null);
-        } else {
-            log.info("异动生效于非 active 学期，跳过 sys_user 冗余列同步: changeId={}, semesterId={}",
-                    changeRequest.getId(), semesterId);
-        }
-    }
-
-    /** 同步 sys_user 冗余归属列（/api/me、/api/admin/user 的数据来源）。 */
-    private void syncRedundantColumns(Long userId, Long collegeId, Long classId) {
-        if (userId == null || userId == UNSET_TARGET_USER_ID) {
-            return;
-        }
-        userMapper.update(null, Wrappers.<SysUser>lambdaUpdate()
-                .eq(SysUser::getId, userId)
-                .eq(SysUser::getDeleted, 0)
-                .set(SysUser::getCollegeId, collegeId)
-                .set(classId != null, SysUser::getClassId, classId));
-    }
-
-    // ============ 字段审查（SPEC §8 异动规则集） ============
-
-    /**
-     * 异动字段审查（逐行执行，错误落 field_check_result）：
-     * TARGET_EXISTS / COLLEGE_EXISTS / CLASS_EXISTS（仅 student）/ TYPE_VALID / VALUE_CHANGED。
-     *
-     * @param classAmbiguous 目标班级同名多条（严格模式：导入行按 CLASS_EXISTS 行错误处理）
-     */
-    private List<FieldCheckIssue> fieldCheck(String type, SysUser target, Long targetCollegeId, Long targetClassId,
-                                             Long beforeCollegeId, Long beforeClassId, boolean classAmbiguous) {
-        List<FieldCheckIssue> issues = new ArrayList<>();
-        if (!TYPE_STUDENT.equals(type) && !TYPE_TEACHER.equals(type)) {
-            issues.add(new FieldCheckIssue("type", "TYPE_VALID", "变更类型不合法"));
-        }
-        if (target == null) {
-            issues.add(new FieldCheckIssue("targetUserNo", "TARGET_EXISTS",
-                    TYPE_TEACHER.equals(type) ? "目标工号不存在" : "目标学号不存在"));
-        }
-        if (targetCollegeId == null || collegeMapper.selectByIdSoft(targetCollegeId) == null) {
-            issues.add(new FieldCheckIssue("targetCollegeId", "COLLEGE_EXISTS", "目标学院不存在"));
-        }
-        if (TYPE_STUDENT.equals(type)) {
-            if (classAmbiguous) {
-                issues.add(new FieldCheckIssue("targetClassId", "CLASS_EXISTS", "目标班级不唯一，请联系教材室核实"));
-            } else if (targetClassId == null || classMapper.selectByIdSoft(targetClassId) == null) {
-                issues.add(new FieldCheckIssue("targetClassId", "CLASS_EXISTS", "目标班级不存在"));
-            }
-        }
-        Long afterClassId = TYPE_TEACHER.equals(type) ? beforeClassId : targetClassId;
-        if (Objects.equals(beforeCollegeId, targetCollegeId) && Objects.equals(beforeClassId, afterClassId)) {
-            issues.add(new FieldCheckIssue("payload", "VALUE_CHANGED", "变更内容无变化"));
-        }
-        return issues;
-    }
-
-    /**
-     * 目标范围校验（在 {@link #fieldCheck} 之上追加）：
-     *
-     * <ul>
-     *   <li><b>角色与类型一致</b>：type=student 的目标必须持有 STUDENT 角色，type=teacher 必须持有
-     *       TEACHER 角色。此前传错工号/学号也能通过字段审查；</li>
-     *   <li><b>提交范围</b>：非 ADMIN 提交人只能对本院（当前学期 user_semester_profile 归属）用户发起异动。
-     *       此前任何持有 {@code change:request:submit} 的教师可对任意 targetUserNo 发起异动，
-     *       管理员批量审批时极易误批。</li>
-     * </ul>
-     *
-     * <p>以字段审查错误（而非 400/403）表达，使逐条提交与批量导入行为一致：
-     * 逐条 → rejected + 错误原因；批量 → 该行计入错误明细，不中断整批。</p>
-     */
-    private List<FieldCheckIssue> withScopeCheck(List<FieldCheckIssue> issues, String type, SysUser target,
-                                                 Belonging before, CurrentUser current, Long semesterId) {
-        if (target == null) {
-            return issues; // 目标不存在已由 TARGET_EXISTS 覆盖
-        }
-        List<FieldCheckIssue> result = new ArrayList<>(issues);
-        if (TYPE_STUDENT.equals(type) || TYPE_TEACHER.equals(type)) {
-            String requiredRole = TYPE_STUDENT.equals(type) ? "STUDENT" : "TEACHER";
-            if (!rolesOf(target.getId()).contains(requiredRole)) {
-                result.add(new FieldCheckIssue("targetUserNo", "TARGET_ROLE_MISMATCH",
-                        TYPE_STUDENT.equals(type) ? "目标用户不是学生" : "目标用户不是教师"));
-            }
-        }
-        if (!current.isAdmin()) {
-            Long myCollege = profileMapper.selectCollegeId(current.userId(), semesterId);
-            if (myCollege == null) {
-                result.add(new FieldCheckIssue("targetUserNo", "TARGET_SCOPE",
-                        "当前账号在该学期没有学院归属，无法提交异动"));
-            } else if (!myCollege.equals(before.collegeId())) {
-                result.add(new FieldCheckIssue("targetUserNo", "TARGET_SCOPE",
-                        "只能对本院用户提交异动"));
-            }
-        }
-        return result;
-    }
-
-    /** 目标用户的角色码集合（sys_user_role → sys_role）。 */
-    private Set<String> rolesOf(Long userId) {
-        List<SysUserRole> userRoles = userRoleMapper.selectList(Wrappers.<SysUserRole>lambdaQuery()
-                .eq(SysUserRole::getUserId, userId)
-                .eq(SysUserRole::getDeleted, 0));
-        if (userRoles.isEmpty()) {
-            return Set.of();
-        }
-        List<Long> roleIds = userRoles.stream().map(SysUserRole::getRoleId).filter(Objects::nonNull).toList();
-        if (roleIds.isEmpty()) {
-            return Set.of();
-        }
-        return roleMapper.selectList(Wrappers.<SysRole>lambdaQuery()
-                        .in(SysRole::getId, roleIds)
-                        .eq(SysRole::getDeleted, 0))
-                .stream()
-                .map(SysRole::getRoleCode)
-                .collect(java.util.stream.Collectors.toSet());
-    }
-
-    // ============ 记录构建 ============
-
-    /**
-     * 构建 change_request：通过 → pending_review；失败 → rejected + field_check_result
-     * + reason=首条错误信息。导入通过行的 reason 取行内「原因」。
-     */
-    private ChangeRequest buildChangeRequest(Long semesterId, Long applicantId, String type, Long targetUserId,
-                                             Long targetCollegeId, Long targetClassId,
-                                             Long beforeCollegeId, Long beforeClassId,
-                                             List<FieldCheckIssue> issues, String batchNo, String rowReason) {
-        ChangeRequest changeRequest = new ChangeRequest();
-        changeRequest.setSemesterId(semesterId);
-        changeRequest.setType(type);
-        changeRequest.setTargetUserId(targetUserId == null ? UNSET_TARGET_USER_ID : targetUserId);
-        changeRequest.setBatchNo(batchNo);
-        changeRequest.setApplicantId(applicantId);
-        // teacher 可变更字段仅 college_id（W16）：after.classId 保持原值
-        Long afterClassId = TYPE_TEACHER.equals(type) ? beforeClassId : targetClassId;
-        changeRequest.setPayloadJson(payload(beforeCollegeId, beforeClassId, targetCollegeId, afterClassId));
-        if (issues.isEmpty()) {
-            changeRequest.setStatus(STATUS_PENDING_REVIEW);
-            if (rowReason != null && !rowReason.isBlank()) {
-                changeRequest.setReason(truncate(rowReason.trim()));
-            }
-        } else {
-            changeRequest.setStatus(STATUS_REJECTED);
-            changeRequest.setFieldCheckResult(issues);
-            changeRequest.setReason(issues.get(0).message());
-        }
-        changeRequest.setDeleted(0L);
-        return changeRequest;
-    }
-
-    private Map<String, Object> payload(Long beforeCollegeId, Long beforeClassId,
-                                        Long afterCollegeId, Long afterClassId) {
-        Map<String, Object> before = new LinkedHashMap<>();
-        before.put("collegeId", beforeCollegeId);
-        before.put("classId", beforeClassId);
-        Map<String, Object> after = new LinkedHashMap<>();
-        after.put("collegeId", afterCollegeId);
-        after.put("classId", afterClassId);
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("before", before);
-        payload.put("after", after);
-        return payload;
-    }
-
     // ============ VO 回填（批量查 SysUser/College/SchoolClass） ============
 
     /**
@@ -726,8 +410,8 @@ public class ChangeRequestService {
             if (record.getApplicantId() != null) {
                 userIds.add(record.getApplicantId());
             }
-            Belonging before = readBelonging(record.getPayloadJson(), "before");
-            Belonging after = readBelonging(record.getPayloadJson(), "after");
+            ChangeRecordSupport.Belonging before = readBelonging(record.getPayloadJson(), "before");
+            ChangeRecordSupport.Belonging after = readBelonging(record.getPayloadJson(), "after");
             addIfNotNull(collegeIds, before.collegeId());
             addIfNotNull(collegeIds, after.collegeId());
             addIfNotNull(classIds, before.classId());
@@ -749,14 +433,16 @@ public class ChangeRequestService {
         vo.setId(record.getId());
         vo.setSemesterId(record.getSemesterId());
         vo.setType(record.getType());
+        vo.setChangeType(record.getChangeType());
+        vo.setChangeTypeLabel(ChangeTypes.labelOf(record.getChangeType()));
         vo.setTargetUserId(record.getTargetUserId());
         SysUser target = userMap.get(record.getTargetUserId());
         if (target != null) {
             vo.setTargetUserNo(target.getUserNo());
             vo.setTargetUserName(target.getName());
         }
-        Belonging before = readBelonging(record.getPayloadJson(), "before");
-        Belonging after = readBelonging(record.getPayloadJson(), "after");
+        ChangeRecordSupport.Belonging before = readBelonging(record.getPayloadJson(), "before");
+        ChangeRecordSupport.Belonging after = readBelonging(record.getPayloadJson(), "after");
         vo.setBeforeCollegeId(before.collegeId());
         vo.setBeforeCollegeName(nameOf(collegeMap, before.collegeId()));
         vo.setBeforeClassId(before.classId());
@@ -817,44 +503,94 @@ public class ChangeRequestService {
         return map;
     }
 
-    private String nameOf(Map<Long, ?> map, Long id) {
-        if (id == null) {
-            return null;
+    /**
+     * 生效落库（W15）：upsert <b>该异动所属学期</b>的 user_semester_profile，
+     * 并在该学期仍是 active 学期时同步 sys_user 冗余列 college_id/class_id
+     * （SPEC §7：冗余列由 profile 同步）。
+     * teacher 仅更新 college_id（class_id 保持原值，MP 非空字段更新策略天然跳过 null）。
+     *
+     * <p>两个历史缺陷在此修正：</p>
+     * <ul>
+     *   <li><b>学期来源</b>：原实现用 {@code requireActiveSemester()}。异动单提交后管理员
+     *       切换学期（常规操作，待审记录会跨切换留存）再审批，归属就被写进新学期，
+     *       旧学期归属保持陈旧、新学期归属被凭空写入。现改为 {@code changeRequest.getSemesterId()}；</li>
+     *   <li><b>清空归属</b>：payload 解析失败时 after.collegeId 为 null，原实现直接
+     *       {@code set(collegeId, null)} 把用户 college_id 置空（MyBatis-Plus 两参 set 无条件写 NULL），
+     *       叠加 CollegeScopeHandler 的 {@code 1 = 0} 使该用户此后查不到任何数据。
+     *       现改为校验失败即抛异常终止审批。</li>
+     * </ul>
+     *
+     * <p>注意：/api/me 与 /api/admin/user 读的是 sys_user 冗余列，若只写 profile，
+     * 审批通过后这些接口会一直回显异动前的学院/班级（本方法两处同写，避免归属不一致）。</p>
+     */
+    private void applyToProfile(ChangeRequest changeRequest) {
+        Long semesterId = changeRequest.getSemesterId();
+        if (semesterId == null) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "异动记录缺少所属学期，无法生效，请驳回后重新提交");
         }
-        Object entity = map.get(id);
-        if (entity instanceof College college) {
-            return college.getName();
+        if (semesterMapper.selectByIdSoft(semesterId) == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "异动所属学期不存在，无法生效");
         }
-        if (entity instanceof SchoolClass clazz) {
-            return clazz.getName();
+        ChangeRecordSupport.Belonging after = readBelonging(changeRequest.getPayloadJson(), "after");
+        boolean isStudent = TYPE_STUDENT.equals(changeRequest.getType());
+        if (after.collegeId() == null) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "异动目标学院缺失（payload 解析失败），无法生效，请驳回后重新提交");
         }
-        return null;
+        if (isStudent && after.classId() == null) {
+            throw new BizException(ErrorCode.BIZ_ERROR, "异动目标班级缺失（payload 解析失败），无法生效，请驳回后重新提交");
+        }
+        Long targetUserId = changeRequest.getTargetUserId();
+        UserSemesterProfile existing = profileMapper.selectByUserAndSemester(targetUserId, semesterId);
+        if (existing == null) {
+            UserSemesterProfile profile = new UserSemesterProfile();
+            profile.setUserId(targetUserId);
+            profile.setSemesterId(semesterId);
+            profile.setCollegeId(after.collegeId());
+            profile.setClassId(isStudent ? after.classId() : null);
+            profile.setStatus(1);
+            profile.setDeleted(0L);
+            profileMapper.insert(profile);
+        } else {
+            UserSemesterProfile update = new UserSemesterProfile();
+            update.setId(existing.getId());
+            update.setCollegeId(after.collegeId());
+            if (isStudent) {
+                update.setClassId(after.classId());
+            }
+            profileMapper.update(update, Wrappers.<UserSemesterProfile>lambdaUpdate()
+                    .eq(UserSemesterProfile::getId, existing.getId()));
+        }
+        // sys_user 冗余列只描述「当前 active 学期归属」：异动所属学期已不是 active 时
+        // 写它会污染当前学期的显示（旧学期归属改完，新学期界面跟着变）。
+        if (semesterId.equals(activeSemesterService.activeId())) {
+            syncRedundantColumns(targetUserId, after.collegeId(), isStudent ? after.classId() : null);
+        } else {
+            log.info("异动生效于非 active 学期，跳过 sys_user 冗余列同步: changeId={}, semesterId={}",
+                    changeRequest.getId(), semesterId);
+        }
     }
 
-    // ============ 归属快照 ============
 
-    /** 目标用户当前归属：优先 active 学期 user_semester_profile，无 profile 回退 sys_user 冗余列 */
-    private Belonging currentBelonging(Long targetUserId, Long semesterId) {
-        if (targetUserId == null) {
-            return new Belonging(null, null);
+    /** 同步 sys_user 冗余归属列（/api/me、/api/admin/user 的数据来源）。 */
+    private void syncRedundantColumns(Long userId, Long collegeId, Long classId) {
+        if (userId == null || userId == UNSET_TARGET_USER_ID) {
+            return;
         }
-        UserSemesterProfile profile = profileMapper.selectByUserAndSemester(targetUserId, semesterId);
-        if (profile != null) {
-            return new Belonging(profile.getCollegeId(), profile.getClassId());
-        }
-        SysUser user = userMapper.selectByIdSoft(targetUserId);
-        if (user == null) {
-            return new Belonging(null, null);
-        }
-        return new Belonging(user.getCollegeId(), user.getClassId());
+        userMapper.update(null, Wrappers.<SysUser>lambdaUpdate()
+                .eq(SysUser::getId, userId)
+                .eq(SysUser::getDeleted, 0)
+                .set(SysUser::getCollegeId, collegeId)
+                .set(classId != null, SysUser::getClassId, classId));
     }
 
-    private Belonging readBelonging(Map<String, Object> payload, String section) {
+
+    private ChangeRecordSupport.Belonging readBelonging(Map<String, Object> payload, String section) {
         if (payload != null && payload.get(section) instanceof Map<?, ?> inner) {
-            return new Belonging(toLong(inner.get("collegeId")), toLong(inner.get("classId")));
+            return new ChangeRecordSupport.Belonging(toLong(inner.get("collegeId")), toLong(inner.get("classId")));
         }
-        return new Belonging(null, null);
+        return new ChangeRecordSupport.Belonging(null, null);
     }
+
 
     private Long toLong(Object value) {
         if (value instanceof Number number) {
@@ -870,74 +606,19 @@ public class ChangeRequestService {
         return null;
     }
 
-    private record Belonging(Long collegeId, Long classId) {
-    }
 
-    // ============ 导入辅助 ============
-
-    private List<ChangeImportRow> readRows(MultipartFile file) {
-        try {
-            // EasyExcel 3.x：默认监听器收集全部行，同步返回（空行由 EasyExcel 自动忽略）
-            return EasyExcel.read(file.getInputStream())
-                    .head(ChangeImportRow.class)
-                    .sheet()
-                    .doReadSync();
-        } catch (IOException e) {
-            log.warn("异动导入文件读取失败: {}", e.getMessage());
-            throw new BizException(ErrorCode.FILE_TYPE_INVALID, "文件读取失败，请检查后重传");
+    private String nameOf(Map<Long, ?> map, Long id) {
+        if (id == null) {
+            return null;
         }
-    }
-
-    private void validateFile(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new BizException(ErrorCode.PARAM_INVALID, "请选择上传文件");
+        Object entity = map.get(id);
+        if (entity instanceof College college) {
+            return college.getName();
         }
-        String fileName = file.getOriginalFilename();
-        if (fileName == null || !fileName.toLowerCase(Locale.ROOT).endsWith(".xlsx")) {
-            throw new BizException(ErrorCode.FILE_TYPE_INVALID, "仅支持 .xlsx 文件");
+        if (entity instanceof SchoolClass clazz) {
+            return clazz.getName();
         }
-        long maxBytes = (long) properties.getImportConfig().getMaxFileMb() * 1024 * 1024;
-        if (file.getSize() > maxBytes) {
-            throw new BizException(ErrorCode.FILE_TOO_LARGE,
-                    "文件超过大小上限（" + properties.getImportConfig().getMaxFileMb() + "MB）");
-        }
-    }
-
-    /** "CHG-" + yyyyMMdd + "-" + 6 位随机；撞号重试（与 change_request.batch_no 唯一） */
-    private String generateBatchNo() {
-        for (int i = 0; i < 3; i++) {
-            String candidate = "CHG-" + LocalDate.now().format(BATCH_DATE) + "-"
-                    + String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
-            if (changeRequestMapper.selectByBatchNo(candidate).isEmpty()) {
-                return candidate;
-            }
-        }
-        throw new BizException(ErrorCode.BIZ_ERROR, "批次号生成失败，请重试");
-    }
-
-    /** 变更类型：兼容 student/teacher 与「学生/教师」；其余原样返回交 TYPE_VALID 行错误 */
-    private String normalizeImportType(String raw) {
-        String value = trimToEmpty(raw);
-        if (TYPE_STUDENT.equalsIgnoreCase(value) || "学生".equals(value)) {
-            return TYPE_STUDENT;
-        }
-        if (TYPE_TEACHER.equalsIgnoreCase(value) || "教师".equals(value)) {
-            return TYPE_TEACHER;
-        }
-        return value;
-    }
-
-    private boolean isBlankRow(ChangeImportRow row) {
-        return blank(row.getUserNo()) && blank(row.getType()) && blank(row.getCollegeName())
-                && blank(row.getClassName()) && blank(row.getReason());
-    }
-
-    private Map<String, Object> rowErrorDetail(int rowNo, String userNo, List<FieldCheckIssue> issues) {
-        Map<String, Object> detail = new LinkedHashMap<>();
-        detail.put("row", rowNo);
-        detail.put("userNo", userNo);
-        detail.put("issues", issues);
-        return detail;
+        return null;
     }
 
     // ============ 通用校验/工具 ============

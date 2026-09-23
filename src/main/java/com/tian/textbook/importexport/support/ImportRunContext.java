@@ -41,6 +41,12 @@ public class ImportRunContext {
     /** 目标学期即 active 学期时才同步 sys_user 归属冗余列（SPEC §5.2：不污染 active 归属） */
     private final boolean writeUserAffiliation;
     /**
+     * 业务批次号（BE-7b：异动导入的 change_request.batch_no，逐 run 生成一次并共享给整批行）。
+     * 其他导入类型不使用。
+     */
+    private String batchNo;
+
+    /**
      * 调用方是否已确认「班级人数下调超阈值」（B13 局部名单防护）。
      * 仅用于审计留痕：确认为真时批次摘要记 {@code classSizeShrinkConfirmed=true}，
      * 便于事后追溯「这次把上限压小是管理员明确点过的」。
@@ -118,6 +124,14 @@ public class ImportRunContext {
 
     public boolean classSizeShrinkConfirmed() {
         return classSizeShrinkConfirmed;
+    }
+
+    public String batchNo() {
+        return batchNo;
+    }
+
+    public void setBatchNo(String batchNo) {
+        this.batchNo = batchNo;
     }
 
     public Set<String> userNos() {

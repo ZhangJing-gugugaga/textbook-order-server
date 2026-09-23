@@ -56,9 +56,6 @@ public class ImportServiceImpl implements ImportService {
     public Long startImport(String bizType, Long semesterId, MultipartFile file,
                             boolean confirmClassSizeShrink) {
         String type = normalizeBizType(bizType);
-        if ("change".equals(type)) {
-            throw new BizException(ErrorCode.PARAM_INVALID, "异动批量导入请使用 /api/secretary/change/import");
-        }
         int maxFileMb = configService.getInt(ConfigService.IMPORT_MAX_FILE_MB,
                 properties.getImportConfig().getMaxFileMb());
         ImportUploadValidator.validate(file, maxFileMb);
@@ -128,9 +125,6 @@ public class ImportServiceImpl implements ImportService {
     @Override
     public ImportPreviewResponse previewImport(String bizType, Long semesterId, MultipartFile file) {
         String type = normalizeBizType(bizType);
-        if ("change".equals(type)) {
-            throw new BizException(ErrorCode.PARAM_INVALID, "异动批量导入请使用 /api/secretary/change/import");
-        }
         if (!"student".equals(type) && !"teacher".equals(type)) {
             throw new BizException(ErrorCode.PARAM_INVALID,
                     "导入预览仅支持学生/教师名单（bizType=" + type + "）");

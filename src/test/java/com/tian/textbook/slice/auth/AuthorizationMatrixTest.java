@@ -81,6 +81,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         DashboardController.class, SemesterWindowController.class,
         AdminNoticeController.class, NoticeController.class, MeController.class,
         com.tian.textbook.approval.controller.ChangeRequestController.class,
+        com.tian.textbook.system.role.controller.RoleController.class,
+        com.tian.textbook.system.role.controller.PermissionController.class,
         com.tian.textbook.auth.AuthController.class})
 @ContextConfiguration(classes = TextbookOrderServerApplication.class)
 @Import({SecurityConfig.class, AuthorizationMatrixTest.SliceTestConfig.class})
@@ -105,6 +107,12 @@ class AuthorizationMatrixTest {
     private NotifyService notifyService;
     @MockBean
     private com.tian.textbook.approval.service.ChangeRequestService changeRequestService;
+    @MockBean
+    private com.tian.textbook.importexport.ImportService importService;
+    @MockBean
+    private com.tian.textbook.importexport.template.TemplateService templateService;
+    @MockBean
+    private com.tian.textbook.system.role.service.RoleService roleService;
     @MockBean
     private AuthService authService;
     @MockBean
@@ -183,16 +191,20 @@ class AuthorizationMatrixTest {
         role.setRoleCode(roleCode);
         role.setRoleName(roleCode);
         when(authUserService.loadRoles(userId)).thenReturn(List.of(role));
-        when(authUserService.permissionsOf(anyList(), eq(roleCode)))
+        // JwtAuthFilter 走 permissionsFor（BE-1：ADMIN 在鉴权层持有全部权限码）
+        when(authUserService.permissionsFor(anyList(), eq(roleCode)))
                 .thenReturn(permissionsOf(roleCode));
     }
 
-    /** 与 db/data-permission.sql 同源的简化权限集（越权矩阵判定用）。 */
+    /**
+     * 与 db/data-permission.sql 同源的简化权限集（越权矩阵判定用）。
+     *
+     * <p>ADMIN 取**全部**权限码（含供货商与角色专属自助类）：BE-1 起超管在鉴权层短路持有
+     * 全部权限（甲方决策「超管可以做所有事情」），因此矩阵里超管调教师/学生自助接口不再 403。</p>
+     */
     private static Set<String> permissionsOf(String roleCode) {
         return switch (roleCode) {
-            case "ADMIN" -> Set.of("order:form:view:all", "order:form:review", "dashboard:stat:view",
-                    "user:account:manage", "semester:semester:manage", "semester:semester:activate",
-                    "semester:window:manage", "notice:task:view", "notice:task:manage");
+            case "ADMIN" -> ALL_PERMISSIONS;
             case "SECRETARY" -> Set.of("order:form:view:college", "semester:window:view",
                     "change:request:submit", "import:batch:view");
             case "TEACHER" -> Set.of("order:form:submit", "order:form:view:self",
@@ -203,6 +215,25 @@ class AuthorizationMatrixTest {
             default -> Set.of();
         };
     }
+
+    /** 全部权限码（超管短路口径）：管理台 + 各角色专属（含供货商） */
+    private static final Set<String> ALL_PERMISSIONS = Set.of(
+            // 管理台
+            "order:form:view:all", "order:form:review", "dashboard:stat:view", "user:account:manage",
+            "user:account:reset", "semester:semester:manage", "semester:semester:activate",
+            "semester:window:manage", "semester:window:view", "org:college:manage", "org:major:manage",
+            "org:class:manage", "textbook:book:manage", "textbook:book:import", "course:course:manage",
+            "course:teacher:manage", "people:student:import", "people:teacher:import",
+            "student:order:view:all", "change:request:review", "import:batch:view",
+            "export:order:create", "export:student:create", "export:notice:create",
+            "notice:task:manage", "notice:task:view", "config:config:manage", "audit:log:view",
+            "role:manage", "role:permission:assign",
+            // 角色专属自助类（BE-1 起超管同样持有）
+            "order:form:submit", "order:form:view:self", "order:form:view:college",
+            "student:order:submit", "student:order:view:self", "change:request:submit",
+            "export:signature:create",
+            // 供货商（D1 默认：超管亦持有）
+            "supplier:order:view", "supplier:order:export");
 
     private String token(long userId, String roleCode) {
         return jwtService.issueAccessToken(userId, "U" + userId, "用户" + userId,
@@ -594,9 +625,9 @@ class AuthorizationMatrixTest {
         teacher.setId(userId + 1000);
         teacher.setRoleCode("TEACHER");
         when(authUserService.loadRoles(userId)).thenReturn(List.of(secretary, teacher));
-        when(authUserService.permissionsOf(anyList(), eq("SECRETARY")))
+        when(authUserService.permissionsFor(anyList(), eq("SECRETARY")))
                 .thenReturn(permissionsOf("SECRETARY"));
-        when(authUserService.permissionsOf(anyList(), eq("TEACHER")))
+        when(authUserService.permissionsFor(anyList(), eq("TEACHER")))
                 .thenReturn(permissionsOf("TEACHER"));
     }
 

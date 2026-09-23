@@ -1,5 +1,5 @@
 -- ============================================================================
--- 权限码种子（37 条 · M1 冻结 · W12：随 OpenAPI 契约一并冻结）
+-- 权限码种子（39 条 · 37 条 M1 冻结 + BE-2 新增 2 条角色管理 · W12：随 OpenAPI 契约一并冻结）
 -- 权限码格式：模块:业务:操作（03 §3.1 清单）
 -- ============================================================================
 SET NAMES utf8mb4;
@@ -49,12 +49,16 @@ INSERT INTO sys_permission (perm_code, perm_name, module) VALUES
 ('dashboard:stat:view',         '数据看板',                     'dashboard'),
 ('config:config:manage',        '系统配置',                     'config'),
 ('audit:log:view',              '审计日志查询',                 'audit'),
+('role:manage',                '角色查看/新建/编辑/删除',      'role'),
+('role:permission:assign',     '角色-权限分配',               'role'),
 ('supplier:order:view',         '供货商清单查看',               'supplier'),
 ('supplier:order:export',       '供货商清单导出',               'supplier')
 ON DUPLICATE KEY UPDATE sys_permission.id = sys_permission.id;
 
 -- ============ 角色 → 权限映射 ============
--- ADMIN（教材室超管）：管理台全部，但**不含角色专属的自助类权限**。
+-- ADMIN（教材室超管）：管理台全部，但**不含角色专属的自助类权限与角色管理权限**。
+-- 说明：超管实际持有全部 39 条权限（BE-1 鉴权层短路），这里的 28 条授权行只服务于
+-- 前端按权限码过滤菜单，因此保持 28 条口径不变。
 --
 -- 为什么必须排除这 7 条（2026-09-22 线上缺陷修复）：权限名本身即写明归属——
 -- 「教师填报提交/补正」「本人征订表单查看」「学生选购提交」「本人选购查看」
@@ -74,7 +78,10 @@ WHERE r.role_code = 'ADMIN'
     -- 角色专属自助类：教师填报/本人表单、学生选购/本人选购、本院表单、签字版导出、异动提交
     'order:form:submit', 'order:form:view:self',
     'student:order:submit', 'student:order:view:self',
-    'order:form:view:college', 'export:signature:create', 'change:request:submit')
+    'order:form:view:college', 'export:signature:create', 'change:request:submit',
+    -- 角色管理（BE-2）：超管由鉴权层短路持有（AuthUserService#permissionsFor），
+    -- 不落授权行——授权行只服务于前端菜单过滤，28 条口径保持不变
+    'role:manage', 'role:permission:assign')
 ON DUPLICATE KEY UPDATE sys_role_permission.id = sys_role_permission.id;
 
 -- SECRETARY（学院秘书）：窗口查看、本院表单、本院导出、签字版、异动提交、批次查看

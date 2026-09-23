@@ -46,6 +46,10 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
     @Autowired
     private ChangeRequestService changeRequestService;
     @Autowired
+    private com.tian.textbook.importexport.ImportService importService;
+    @Autowired
+    private com.tian.textbook.importexport.mapper.ImportBatchMapper importBatchMapper;
+    @Autowired
     private ChangeRequestMapper changeRequestMapper;
     @Autowired
     private SemesterMapper semesterMapper;
@@ -65,6 +69,102 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
     private Long student2;
     private Long student3;
     private Long secretaryId;
+
+    // ============ BE-7a：异动类型（转专业/留级/专升本/其他） ============
+
+    @Test
+    @DisplayName("BE-7a：逐条提交带 changeType → 落库并回显中文；缺省归一为 OTHER")
+    void submit_withChangeType() {
+        seed();
+
+        var transferred = changeRequestService.submit(new ChangeSubmitRequest(
+                "student", "ST2", collegeB, classB, "MAJOR_TRANSFER"));
+        assertThat(transferred.getChangeType()).isEqualTo("MAJOR_TRANSFER");
+        assertThat(transferred.getChangeTypeLabel()).isEqualTo("转专业");
+        assertThat(changeRequestMapper.selectByIdSoft(transferred.getId()).getChangeType())
+                .isEqualTo("MAJOR_TRANSFER");
+
+        // 中文与未知值：中文可解析，未知值归一为 OTHER（不阻断历史客户端）
+        var repeated = changeRequestService.submit(new ChangeSubmitRequest(
+                "student", "ST3", collegeB, classB, "留级"));
+        assertThat(repeated.getChangeType()).isEqualTo("GRADE_REPEAT");
+
+        var unknown = changeRequestService.submit(new ChangeSubmitRequest(
+                "student", "ST4", collegeB, classB, "说不清的说法"));
+        assertThat(unknown.getChangeType()).isEqualTo("OTHER");
+        assertThat(unknown.getChangeTypeLabel()).isEqualTo("其他");
+    }
+
+    @Test
+    @DisplayName("BE-7a：审批列表支持 changeType 筛选，历史数据（null）回显未分类")
+    void page_filterByChangeType() {
+        seed();
+        var one = changeRequestService.submit(new ChangeSubmitRequest(
+                "student", "ST2", collegeB, classB, "MAJOR_TRANSFER"));
+        changeRequestService.submit(new ChangeSubmitRequest(
+                "student", "ST3", collegeB, classB, "UPGRADE"));
+
+        var admin = seeder.user("ADP", "超管", "13800000055", null, null, 1, 0, 1, "ADMIN");
+        TestSecurity.authenticate(admin.getId(), "ADP", "超管", Set.of("ADMIN"), "ADMIN",
+                seeder.permissionsOf("ADMIN"));
+        var filtered = changeRequestService.page(null, null, null, null, "MAJOR_TRANSFER", 1, 20);
+        assertThat(filtered.list()).singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getId()).isEqualTo(one.getId());
+                    assertThat(item.getChangeTypeLabel()).isEqualTo("转专业");
+                });
+        assertThat(changeRequestService.page(null, null, null, null, null, 1, 20).total())
+                .isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("BE-7a：导入第 6 列「异动类型」（中文/枚举码），缺列不阻断")
+    void import_changeTypeColumn() throws Exception {
+        seed();
+        List<ChangeImportRow> rows = List.of(
+                row6("ST2", "student", "外语学院", "英语2401", "转专业", "MAJOR_TRANSFER"),
+                row6("ST3", "student", "外语学院", "英语2401", "留级", "留级"),
+                row6("ST1", "student", "外语学院", "英语2401", "专升本", null));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        EasyExcel.write(out, ChangeImportRow.class).sheet("异动").doWrite(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "changes6.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", out.toByteArray());
+
+        Long batchId = importService.startImport("change", null, file);
+        var batch = awaitDone(batchId);
+        assertThat(batch.getOkCount()).isEqualTo(3);
+
+        List<ChangeRequest> imported = changeRequestMapper.selectByBatchNo(batch.getBatchNo());
+        assertThat(imported).extracting(ChangeRequest::getChangeType)
+                .containsExactlyInAnyOrder("MAJOR_TRANSFER", "GRADE_REPEAT", "OTHER");
+    }
+
+    private ChangeImportRow row6(String userNo, String type, String college, String clazz,
+                                 String reason, String changeType) {
+        ChangeImportRow row = row(userNo, type, college, clazz, reason);
+        row.setChangeType(changeType);
+        return row;
+    }
+
+    /** 轮询异步导入批次至终态（BE-7b：异动导入改为异步后用例需要等待） */
+    private com.tian.textbook.importexport.entity.ImportBatch awaitDone(Long batchId) {
+        long deadline = System.currentTimeMillis() + java.time.Duration.ofSeconds(60).toMillis();
+        com.tian.textbook.importexport.entity.ImportBatch batch =
+                importBatchMapper.selectByIdSoft(batchId);
+        while (batch == null || (!"done".equals(batch.getStatus()) && !"failed".equals(batch.getStatus()))) {
+            assertThat(System.currentTimeMillis()).isLessThan(deadline);
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            batch = importBatchMapper.selectByIdSoft(batchId);
+        }
+        assertThat(batch).isNotNull();
+        assertThat(batch.getStatus()).as("批次应成功结束: %s", batch.getErrorDetail()).isEqualTo("done");
+        return batch;
+    }
 
     @AfterEach
     void tearDown() {
@@ -115,7 +215,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
         seed();
 
         var submitted = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "ST1", collegeB, classB));
+                "student", "ST1", collegeB, classB, null));
         assertThat(submitted.getStatus()).isEqualTo("pending_review");
         assertThat(submitted.getAfterCollegeId()).isEqualTo(collegeB);
         assertThat(submitted.getAfterClassId()).isEqualTo(classB);
@@ -145,7 +245,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
         seeder.profile(teacher.getId(), semesterId, collegeA, null);
 
         var submitted = changeRequestService.submit(new ChangeSubmitRequest(
-                "teacher", "TH9", collegeB, null));
+                "teacher", "TH9", collegeB, null, null));
         assertThat(submitted.getStatus()).isEqualTo("pending_review");
 
         var admin = seeder.user("AD9", "超管", "13800000098", null, null, 1, 0, 1, "ADMIN");
@@ -186,7 +286,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
         seed();
 
         var rejected = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "NOSUCH", collegeB, classB));
+                "student", "NOSUCH", collegeB, classB, null));
 
         assertThat(rejected.getStatus()).isEqualTo("rejected");
         assertThat(rejected.getFieldCheckResult()).singleElement()
@@ -207,7 +307,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
         seed();
 
         var rejected = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "ST1", collegeA, classA));
+                "student", "ST1", collegeA, classA, null));
 
         assertThat(rejected.getStatus()).isEqualTo("rejected");
         assertThat(rejected.getFieldCheckResult())
@@ -232,17 +332,21 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 out.toByteArray());
 
-        var importResult = changeRequestService.importRows(file);
+        // BE-7b：异动导入改为异步批次（每 500 行一事务 + 进度 + 错误明细文件）
+        Long batchId = importService.startImport("change", null, file);
+        var batchInfo = awaitDone(batchId);
 
-        assertThat(importResult.getTotal()).isEqualTo(4);
-        assertThat(importResult.getOkCount()).isEqualTo(2);
-        assertThat(importResult.getErrorCount()).isEqualTo(2);
-        assertThat(importResult.getBatchNo()).startsWith("CHG-");
+        assertThat(batchInfo.getTotal()).isEqualTo(4);
+        assertThat(batchInfo.getOkCount()).isEqualTo(2);
+        assertThat(batchInfo.getErrorCount()).isEqualTo(2);
+        assertThat(batchInfo.getBatchNo()).startsWith("CHG-");
+        // 错误明细逐行可见（供下载核对）
+        assertThat(batchInfo.getErrorDetail()).hasSize(2);
 
-        List<ChangeRequest> batch = changeRequestMapper.selectByBatchNo(importResult.getBatchNo());
+        List<ChangeRequest> batch = changeRequestMapper.selectByBatchNo(batchInfo.getBatchNo());
         assertThat(batch).hasSize(4);
         assertThat(batch).allSatisfy(r -> assertThat(r.getBatchNo())
-                .isEqualTo(importResult.getBatchNo()));
+                .isEqualTo(batchInfo.getBatchNo()));
         assertThat(batch).filteredOn(r -> "pending_review".equals(r.getStatus())).hasSize(2);
         assertThat(batch).filteredOn(r -> "rejected".equals(r.getStatus())).hasSize(2);
 
@@ -252,7 +356,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
                 seeder.permissionsOf("ADMIN"));
 
         var result = changeRequestService.batchReview(new ChangeBatchReviewRequest(
-                importResult.getBatchNo(), "pass", null));
+                batchInfo.getBatchNo(), "pass", null));
 
         assertThat(result.getCount()).isEqualTo(2);
         assertThat(result.getAction()).isEqualTo("pass");
@@ -269,7 +373,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
     void review_rejectWithoutReason_returns400() {
         seed();
         var submitted = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "ST1", collegeB, classB));
+                "student", "ST1", collegeB, classB, null));
 
         assertThatThrownBy(() -> changeRequestService.review(submitted.getId(),
                 new ChangeReviewRequest("reject", null)))
@@ -282,7 +386,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
     void review_alreadyProcessed_returns409() {
         seed();
         var submitted = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "ST1", collegeB, classB));
+                "student", "ST1", collegeB, classB, null));
         var admin = seeder.user("AD3", "超管", "13800000011", null, null, 1, 0, 1, "ADMIN");
         TestSecurity.authenticate(admin.getId(), "AD3", "超管", Set.of("ADMIN"), "ADMIN",
                 seeder.permissionsOf("ADMIN"));
@@ -302,7 +406,7 @@ class ChangeApprovalIntegrationTest extends IntegrationTestBase {
         seeder.profile(teacher.getId(), semesterId, collegeA, null);
 
         assertThatThrownBy(() -> changeRequestService.submit(new ChangeSubmitRequest(
-                "teacher", "TH", collegeB, classB)))
+                "teacher", "TH", collegeB, classB, null)))
                 .isInstanceOf(BizException.class)
                 .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.PARAM_INVALID));
     }

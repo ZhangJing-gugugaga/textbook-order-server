@@ -77,6 +77,9 @@ class DataScopeGuardTest {
             "SysRoleMapper#selectByUserId",
             "SysUserRoleMapper#selectRoleIdsByUser",
             "SysUserRoleMapper#selectByUserAndRole",
+            // 账号角色全量覆盖（BE-2）：仅 user:account:manage（超管专属）可达，
+            // 且作用对象由路径参数指定（管理员改他人角色），无学院维度隔离需求
+            "SysUserRoleMapper#softDeleteByUser",
             // 认证/会话自管理：仅作用于入参用户自身（登出、改密、过期令牌清理）
             "SysUserMapper#revokeAllTokens",
             "SysUserTokenMapper#revokeAllByUser",

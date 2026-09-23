@@ -216,7 +216,8 @@ class LocalMySqlIntegrationTest {
         }
         try (Connection connection = verifyConnection(); Statement statement = connection.createStatement()) {
             assertThat(count(statement, "sys_role")).isEqualTo(5);
-            assertThat(count(statement, "sys_permission")).isEqualTo(37);
+            // 39 = 37 条契约冻结 + BE-2 新增 2 条角色管理
+            assertThat(count(statement, "sys_permission")).isEqualTo(39);
             assertThat(count(statement, "sys_user")).isEqualTo(18);
             assertThat(count(statement, "sys_user_role")).isEqualTo(19);
             // 43 = ADMIN 28（37 条权限去掉 2 条供货商 + 7 条角色专属自助类，2026-09-22 收权）
@@ -275,6 +276,53 @@ class LocalMySqlIntegrationTest {
         }
     }
 
+    // ============ 4.1 2026-09-23 迁移脚本（BE-2/BE-4/BE-5d/BE-6/BE-7a） ============
+
+    @Test
+    @DisplayName("真实 MySQL：2026-09-23 迁移脚本可在当前 schema 上重复执行（幂等），对象齐备")
+    void migrationScripts20260923_areIdempotentAndComplete() throws Exception {
+        List<String> scripts = List.of(
+                "db/migration-2026-09-23-role-permission.sql",
+                "db/migration-2026-09-23-order-withdraw.sql",
+                "db/migration-2026-09-23-notify.sql",
+                "db/migration-2026-09-23-reserve.sql");
+        // 连跑两轮：存储过程外壳的 information_schema 幂等判断生效（第二轮全部跳过）
+        for (int round = 1; round <= 2; round++) {
+            for (String script : scripts) {
+                applyScript(script);
+            }
+        }
+        try (Connection connection = verifyConnection(); Statement statement = connection.createStatement()) {
+            // BE-2：2 条角色管理权限码
+            assertThat(countWhere(statement, "sys_permission",
+                    "perm_code IN ('role:manage','role:permission:assign')")).isEqualTo(2);
+            // BE-4：order_form.withdrawn_at
+            assertThat(columnExists(connection, "order_form", "withdrawn_at")).isTrue();
+            // BE-5d：notice_record.semester_id + 索引 + 历史表
+            assertThat(columnExists(connection, "notice_record", "semester_id")).isTrue();
+            assertThat(indexExists(connection, "notice_record", "idx_record_semester")).isTrue();
+            assertThat(tableExists(connection, "notice_record_history")).isTrue();
+            assertThat(indexExists(connection, "notice_record_history", "uk_history_record")).isTrue();
+            // BE-7a：change_request.change_type
+            assertThat(columnExists(connection, "change_request", "change_type")).isTrue();
+            // BE-6：22 张表各 6 个 reserve 列
+            for (String table : RESERVE_TABLES) {
+                assertThat(countWhere(statement, "information_schema.COLUMNS",
+                        "TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '" + table
+                                + "' AND COLUMN_NAME LIKE 'reserve%'"))
+                        .as("%s 应有 6 个 reserve 列", table)
+                        .isEqualTo(6);
+            }
+        }
+    }
+
+    /** BE-6 覆盖的 22 张表（另 3 张 sys_user/college/textbook 早已有 reserve 列） */
+    private static final List<String> RESERVE_TABLES = List.of(
+            "sys_user_token", "sys_role", "sys_permission", "sys_user_role", "sys_role_permission",
+            "major", "school_class", "semester", "user_semester_profile", "course", "teacher_course",
+            "order_form", "order_form_item", "student_order", "student_order_item", "change_request",
+            "import_batch", "export_task", "notice_task", "notice_record", "system_config", "audit_log");
+
     // ============ 5. 方言敏感 SQL 直跑（H2 会掩盖的写法） ============
 
     @Test
@@ -305,6 +353,27 @@ class LocalMySqlIntegrationTest {
     // ============ 工具 ============
 
     /** 读取 classpath 上的 SQL 脚本并按 ; 切分执行（跳过注释行）。 */
+    /** 条件计数（information_schema / 业务表通用） */
+    private static long countWhere(Statement statement, String table, String where) throws Exception {
+        try (ResultSet rs = statement.executeQuery(
+                "SELECT COUNT(1) FROM " + table + " WHERE " + where)) {
+            rs.next();
+            return rs.getLong(1);
+        }
+    }
+
+    private static boolean tableExists(Connection connection, String table) throws Exception {
+        try (java.sql.PreparedStatement ps = connection.prepareStatement(
+                "SELECT COUNT(1) FROM information_schema.TABLES "
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?")) {
+            ps.setString(1, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1) > 0;
+            }
+        }
+    }
+
     private static void applyScript(String resource) throws Exception {
         String sql;
         try (InputStream in = LocalMySqlIntegrationTest.class.getClassLoader().getResourceAsStream(resource)) {

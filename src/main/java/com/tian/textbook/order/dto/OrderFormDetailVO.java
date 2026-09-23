@@ -41,6 +41,14 @@ public class OrderFormDetailVO {
     private LocalDateTime correctDeadline;
 
     /**
+     * 最近一次主动撤回时间（BE-4）。
+     *
+     * <p>非空表示教师曾在待审核阶段撤回修改过（前端提示「已撤回（时间），修改后请重新提交」）；
+     * 撤回后 {@code status=draft}、{@code submittedAt} 为空、明细保留。</p>
+     */
+    private LocalDateTime withdrawnAt;
+
+    /**
      * 内容版本（每次教师提交/补正整单覆盖后 +1）。
      *
      * <p>审核端**必须回传**本字段（{@code POST /api/admin/order-forms/{id}/review} 的

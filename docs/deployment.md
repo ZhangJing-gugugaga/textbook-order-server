@@ -55,7 +55,22 @@ mysql -utextbook -p textbook_order < src/main/resources/db/data-permission.sql #
 ```bash
 mysqldump --single-transaction -uroot textbook_order | gzip > 升级前备份.sql.gz   # 先备份（§6）
 mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-21.sql
+# 2026-09-23 即时决策（BE-1~BE-8）：四个脚本，可重复执行，建议按顺序
+mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-role-permission.sql
+mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-order-withdraw.sql
+mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-notify.sql
+mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-reserve.sql
 ```
+
+| 2026-09-23 脚本 | 内容 | 不做会怎样 |
+|------|------|-----------|
+| `migration-2026-09-23-role-permission.sql` | 新增 `role:manage` / `role:permission:assign` 两条权限码（37 → 39） | 角色管理接口 403（权限码不存在），权限目录少 2 条 |
+| `migration-2026-09-23-order-withdraw.sql` | `order_form.withdrawn_at` | 教师「撤回修改」500（Unknown column） |
+| `migration-2026-09-23-notify.sql` | `notice_record.semester_id`（含回填）+ `idx_record_semester` + `notice_record_history` 表 + `send_status` 加宽到 24 + `change_request.change_type` | 学期归档迁移无判定列；入口确认 500（`confirmed_by_entry` 18 字符放不进 VARCHAR(16)）；异动类型导入/筛选 500 |
+| `migration-2026-09-23-reserve.sql` | 22 张表补 `reserve1~6` | 结构漂移（新装库有、存量库无），后续按预留列做的扩展在旧库失败 |
+
+> 幂等：四个脚本均先查 `information_schema` 再 ALTER（`role-permission` 用 `ON DUPLICATE KEY UPDATE`），可重复执行；
+> 真库验证见 `LocalMySqlIntegrationTest#migrationScripts20260923_areIdempotentAndComplete`（连跑两轮 + 对象齐备断言）。
 
 脚本可重复执行（内部按 `information_schema` 判断对象是否已存在），内容与影响：
 
@@ -375,6 +390,16 @@ curl -s localhost:8080/actuator/health   # 期望 {"status":"UP"}
   误归档的救援路径：`POST /api/admin/semester/{id}/unarchive`（body `{version, confirm:true}`，
   仅当当前没有 active 学期时可用；恢复后窗口仍为 closed，需手动重新开启）。
   运维兜底（仅在无接口可用时）：`UPDATE semester SET active_status='active' WHERE id=<id>;`
+- **超管全权限（BE-1）**：`ADMIN` 在鉴权层短路持有全部 39 条权限，`sys_role_permission` 的 28 行只服务前端菜单过滤。
+  改角色/权限后 `AuthUserService#evictAllPermissions()` 会失效 5 分钟缓存（接口内部已调用），无需重启
+- **角色管理（BE-2）**：内置角色（ADMIN/SECRETARY/TEACHER/STUDENT/SUPPLIER）不可删除、编码不可改；ADMIN 权限集不可改；
+  删除仍有账号绑定的角色返回 409；**账号角色变更会强制该账号重新登录**（`role_version+1` + 撤销 refresh）
+- **通知归档（BE-5d）**：学期归档时把该学期 `notice_record` 分批（5000/批）迁入 `notice_record_history`，独立事务、失败仅告警
+  （可重跑，幂等靠 `uk_history_record`）；进度/失败名单/导出对两表 UNION 查询，历史任务仍可查可导。
+  排查时注意：历史学期的记录不在 `notice_record` 而在 `notice_record_history`
+- **通知节奏（BE-5c）**：调度每小时第 5 分钟扫描 + `notice.interval_hours` 判定；**新任务立即发首轮**。
+  窗口关闭（提前截止/自动截止）会自动关闭该学期 active 任务，之后不再重发
+- **教师撤回（BE-4）**：`pending_review` 可在窗口内撤回为 `draft`；撤回后管理员审核会被 409 拦住（审批结论不会被静默撤销）
 - **局部名单门禁（2026-09-23）**：学生名单导入会把班级人数重算为文件内该班去重人数（教师填报上限），
   下调比例 > 20% 且 ≥ 5 人时导入返回 409 并要求 `confirmClassSizeShrink=true`；阈值可用
   `TEXTBOOK_IMPORT_CLASS_SIZE_SHRINK_CONFIRM_PCT` / `..._MIN_DROP` 调整（默认 20 / 5），

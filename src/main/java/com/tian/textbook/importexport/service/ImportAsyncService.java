@@ -77,6 +77,8 @@ public class ImportAsyncService {
     private final ImportBatchMapper importBatchMapper;
     private final ImportRowWriter rowWriter;
     private final ClassSizeGuard classSizeGuard;
+    /** 异动导入行处理（BE-7b：approval 模块提供校验与落库，规则与逐条提交同源） */
+    private final com.tian.textbook.approval.service.ChangeImportHandler changeImportHandler;
     private final TextbookProperties properties;
     private final ConfigService configService;
     private final AuditService auditService;
@@ -129,6 +131,20 @@ public class ImportAsyncService {
                         this::validateTextbook, rowWriter::writeTextbookRows)).sheet().doRead();
                 case "teacher_course" -> EasyExcel.read(file, TeacherCourseImportRow.class, listener(ctx,
                         this::validateTeacherCourse, rowWriter::writeTeacherCourseRows)).sheet().doRead();
+                case "change" -> {
+                    // BE-7b：异动导入接入统一异步链路（每 500 行一事务 + 进度 + 错误明细文件）。
+                    // batch_no 逐批生成一次（change_request 的批量审批按它聚合），
+                    // 并回写到 import_batch 便于 batchId ↔ batchNo 互相追溯。
+                    String batchNo = changeImportHandler.newBatchNo();
+                    ctx.setBatchNo(batchNo);
+                    importBatchMapper.update(null, Wrappers.<ImportBatch>lambdaUpdate()
+                            .eq(ImportBatch::getId, batchId)
+                            .set(ImportBatch::getBatchNo, batchNo));
+                    EasyExcel.read(file, com.tian.textbook.approval.dto.ChangeImportRow.class,
+                            listener(ctx, changeImportHandler::validate, changeImportHandler::write,
+                                    this::finalizeBatch, changeImportHandler::outcomeMessage))
+                            .sheet().doRead();
+                }
                 default -> throw new BizException(ErrorCode.PARAM_INVALID, "不支持的导入类型: " + bizType);
             }
         } catch (Exception e) {
@@ -478,6 +494,15 @@ public class ImportAsyncService {
                                               ImportReadListener.RowValidator<T> validator,
                                               ImportReadListener.RowFlusher<T> flusher) {
         return new ImportReadListener<>(ctx, importBatchMapper, validator, flusher, this::finalizeBatch);
+    }
+
+    /** 带业务结论的监听器（异动导入：行已落库但字段审查不通过 → 计错误行）。 */
+    private <T> ImportReadListener<T> listener(ImportRunContext ctx,
+                                              ImportReadListener.RowValidator<T> validator,
+                                              ImportReadListener.RowFlusher<T> flusher,
+                                              java.util.function.BiConsumer<ImportRunContext, ImportRunSummary> finalizer,
+                                              ImportReadListener.RowOutcome<T> outcome) {
+        return new ImportReadListener<>(ctx, importBatchMapper, validator, flusher, finalizer, outcome);
     }
 
     /** 只读扫描用：flusher 空转、finalizer 由调用方接管（不写批次终态）。 */

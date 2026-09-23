@@ -49,6 +49,9 @@ public class SemesterService {
     /** 窗口变更与学期切换串行化（SPEC §6/§7：进程内锁 + version 乐观校验） */
     public static final ReentrantLock SEMESTER_LOCK = new ReentrantLock();
 
+    /** 窗口状态：已截止（与 SemesterMapper 的 window_status 取值一致） */
+    private static final String CLOSED = "closed";
+
     private final SemesterMapper semesterMapper;
     private final SysUserMapper userMapper;
     private final AuditService auditService;
@@ -267,6 +270,8 @@ public class SemesterService {
                 log.warn("进行中窗口的学期被显式确认归档: id={}, name={}, 窗口={} ~ {}",
                         id, semester.getName(), semester.getWindowStart(), semester.getWindowEnd());
             }
+            // BE-5d：通知记录迁入历史表（独立事务、分批；失败不影响归档结果，可重跑）
+            archiveNoticeRecordsQuietly(id);
             activeSemesterService.evict();
         } finally {
             SEMESTER_LOCK.unlock();
@@ -327,6 +332,22 @@ public class SemesterService {
             return semesterMapper.selectByIdSoft(id);
         } finally {
             SEMESTER_LOCK.unlock();
+        }
+    }
+
+    /**
+     * 归档后把该学期的通知记录迁入历史表（BE-5d）。
+     *
+     * <p>独立事务（NotifyService 侧 REQUIRES_NEW）且吞异常：迁移失败只告警，不回滚归档
+     * （归档是状态切换，数据迁移可事后重跑，幂等靠 {@code uk_history_record}）。</p>
+     */
+    private void archiveNoticeRecordsQuietly(Long semesterId) {
+        try {
+            long rows = windowChangeNotifier.archiveSemesterRecords(semesterId);
+            log.info("学期归档：通知记录迁移 {} 行（semesterId={}）", rows, semesterId);
+        } catch (Exception e) {
+            log.warn("学期归档：通知记录迁移失败（可重跑，不影响归档结果）semesterId={}, err={}",
+                    semesterId, e.getMessage());
         }
     }
 
@@ -445,9 +466,14 @@ public class SemesterService {
             detail.put("before", before);
             detail.put("after", after);
             auditService.record(AuditService.WINDOW, "window", String.valueOf(id), detail);
-            // 自动创建/合并系统通知任务（SPEC §6）
-            windowChangeNotifier.onWindowChange(id, "征订窗口变更通知",
-                    changeDesc + "。新的窗口截止时间：" + semester.getWindowEnd() + "，请尽快提交。");
+            // 窗口关闭 → 关闭该学期 active 通知任务（BE-5a：征订结束即不再要求确认，也不再重发）；
+            // 其余变更（开启/延长/设置）→ 自动创建/合并系统通知任务（SPEC §6）
+            if (CLOSED.equals(semester.getWindowStatus())) {
+                windowChangeNotifier.onWindowClosed(id, changeDesc);
+            } else {
+                windowChangeNotifier.onWindowChange(id, "征订窗口变更通知",
+                        changeDesc + "。新的窗口截止时间：" + semester.getWindowEnd() + "，请尽快提交。");
+            }
             activeSemesterService.evict();
             return semesterMapper.selectByIdSoft(id);
         } finally {
@@ -479,8 +505,13 @@ public class SemesterService {
         detail.put("after", windowSnapshot(semesterMapper.selectByIdSoft(id)));
         auditService.record(AuditService.WINDOW, "window", String.valueOf(id), detail);
         Semester updated = semesterMapper.selectByIdSoft(id);
-        windowChangeNotifier.onWindowChange(id, "征订窗口变更通知",
-                changeDesc + "。新的窗口截止时间：" + updated.getWindowEnd() + "，请尽快提交。");
+        // 自动截止 → 关闭 active 任务；自动开启 → 合并/创建通知任务（BE-5a）
+        if (CLOSED.equals(targetStatus)) {
+            windowChangeNotifier.onWindowClosed(id, changeDesc);
+        } else {
+            windowChangeNotifier.onWindowChange(id, "征订窗口变更通知",
+                    changeDesc + "。新的窗口截止时间：" + updated.getWindowEnd() + "，请尽快提交。");
+        }
         activeSemesterService.evict();
     }
 

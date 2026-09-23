@@ -46,7 +46,7 @@ public class TemplateService {
     private static final String[] SIGNATURE_HEADERS =
             {"学院", "教师", "工号", "课程", "班级", "ISBN", "书名", "数量", "签字"};
     private static final String[] CHANGE_HEADERS =
-            {"学号/工号", "变更类型", "目标学院", "目标班级", "原因"};
+            {"学号/工号", "异动对象", "目标学院", "目标班级", "原因", "异动类型"};
 
     /** bizType → 模板文件名（textbook/teacher_course 复用教材/任课模板） */
     public static String templateFileOf(String bizType) {
@@ -89,7 +89,7 @@ public class TemplateService {
     }
 
     public void writeChange(OutputStream out) {
-        // 列优先表头：5 列各 1 个单元格（异动导入由 approval 模块按下标读取，列顺序即契约）
+        // 列优先表头：6 列各 1 个单元格（异动导入按下标读取，列顺序即契约；第 6 列「异动类型」为 BE-7a 追加列）
         List<List<String>> columns = new ArrayList<>();
         for (String header : CHANGE_HEADERS) {
             columns.add(List.of(header));

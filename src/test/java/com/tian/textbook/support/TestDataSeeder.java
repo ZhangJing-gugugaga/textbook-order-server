@@ -82,6 +82,8 @@ public class TestDataSeeder {
             {"dashboard:stat:view", "数据看板", "dashboard"},
             {"config:config:manage", "系统配置", "config"},
             {"audit:log:view", "审计日志查询", "audit"},
+            {"role:manage", "角色查看/新建/编辑/删除", "role"},
+            {"role:permission:assign", "角色-权限分配", "role"},
             {"supplier:order:view", "供货商清单查看", "supplier"},
             {"supplier:order:export", "供货商清单导出", "supplier"},
     };
@@ -305,13 +307,33 @@ public class TestDataSeeder {
 
     // ============ 查询辅助 ============
 
-    /** 角色权限码（构造 CurrentUser 用）。 */
+    /**
+     * 角色权限码（构造 CurrentUser 用）。
+     *
+     * <p><b>ADMIN 返回全部权限码</b>：BE-1 起超管在鉴权层短路持有全部权限
+     * （{@code AuthUserService#permissionsFor}），而 {@code sys_role_permission} 里
+     * ADMIN 仍只有 28 行（保留给前端菜单过滤）。集成测试直接构造 CurrentUser、绕过过滤器，
+     * 因此这里必须镜像短路口径，否则测试里的超管会缺 11 条权限（与生产行为不符）。</p>
+     */
     public Set<String> permissionsOf(String roleCode) {
+        if ("ADMIN".equals(roleCode)) {
+            return allPermissionCodes();
+        }
         SysRole role = roleMapper.selectByCode(roleCode);
         if (role == null) {
             return Set.of();
         }
         return Set.copyOf(roleMapper.selectPermCodesByRole(role.getId()));
+    }
+
+    /** 全部权限码（超管短路口径，BE-1） */
+    public Set<String> allPermissionCodes() {
+        return Arrays.stream(PERMISSIONS).map(p -> p[0]).collect(java.util.stream.Collectors.toSet());
+    }
+
+    /** 学期 Mapper（用例需要直接改学期状态，如 activateIfDraft 造 active 学期） */
+    public SemesterMapper semesterMapper() {
+        return semesterMapper;
     }
 
     public Long roleId(String roleCode) {

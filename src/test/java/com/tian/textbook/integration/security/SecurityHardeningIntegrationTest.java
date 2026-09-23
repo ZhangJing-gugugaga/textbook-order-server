@@ -200,7 +200,7 @@ class SecurityHardeningIntegrationTest extends IntegrationTestBase {
         TestSecurity.authenticate(secretary.getId(), "SEC5", "秘书", Set.of("SECRETARY"), "SECRETARY",
                 seeder.permissionsOf("SECRETARY"));
         var submitted = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "ST5", targetCollege.getId(), targetClass.getId()));
+                "student", "ST5", targetCollege.getId(), targetClass.getId(), null));
         assertThat(submitted.getStatus()).isEqualTo("pending_review");
 
         asAdmin();
@@ -232,7 +232,7 @@ class SecurityHardeningIntegrationTest extends IntegrationTestBase {
         TestSecurity.authenticate(secretary.getId(), "SEC6", "秘书", Set.of("SECRETARY"), "SECRETARY",
                 seeder.permissionsOf("SECRETARY"));
         var submitted = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "ST6", targetCollege.getId(), targetClass.getId()));
+                "student", "ST6", targetCollege.getId(), targetClass.getId(), null));
         assertThat(submitted.getStatus()).isEqualTo("pending_review");
 
         // 模拟 payload 被破坏（after 段缺失，readBelonging 返回 (null, null)）
@@ -311,7 +311,7 @@ class SecurityHardeningIntegrationTest extends IntegrationTestBase {
         TestSecurity.authenticate(secretary.getId(), "SEC13", "秘书", Set.of("SECRETARY"), "SECRETARY",
                 seeder.permissionsOf("SECRETARY"));
         var result = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "T13", scenario.collegeId(), scenario.classId()));
+                "student", "T13", scenario.collegeId(), scenario.classId(), null));
 
         assertThat(result.getStatus()).isEqualTo("rejected");
         assertThat(result.getFieldCheckResult())
@@ -336,7 +336,7 @@ class SecurityHardeningIntegrationTest extends IntegrationTestBase {
         TestSecurity.authenticate(secretary.getId(), "SEC14", "秘书", Set.of("SECRETARY"), "SECRETARY",
                 seeder.permissionsOf("SECRETARY"));
         var result = changeRequestService.submit(new ChangeSubmitRequest(
-                "student", "ST13", scenario.collegeId(), otherClass.getId()));
+                "student", "ST13", scenario.collegeId(), otherClass.getId(), null));
 
         assertThat(result.getStatus()).isEqualTo("rejected");
         assertThat(result.getFieldCheckResult())

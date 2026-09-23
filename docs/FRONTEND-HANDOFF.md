@@ -164,7 +164,43 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
 > **不要拿真实学期的 activate/archive 做冒烟验证**，归档后业务会停摆（虽然现在有 unarchive 可救，
 > 但仍应使用可重建库的环境，如 `scripts/e2e-smoke.sh`）。
 
-### A9. 两类协议错误码
+### A9. 即时决策带来的契约变更（2026-09-23 · BE-1~BE-8）
+
+**新增端点（14 个）**
+
+| 方法 | 路径 | 权限 | 说明 |
+|------|------|------|------|
+| GET | `/api/admin/role` | `role:manage` | 角色列表（含 `builtIn` / `userCount` / `permCodes`） |
+| POST | `/api/admin/role` | `role:manage` | 新建角色 `{roleCode, roleName, sort?}` |
+| PUT | `/api/admin/role/{id}` | `role:manage` | 编辑名称/排序 |
+| DELETE | `/api/admin/role/{id}` | `role:manage` | 删除（内置 400 / 有账号 409） |
+| PUT | `/api/admin/role/{id}/permissions` | `role:permission:assign` | 角色-权限全量覆盖 `{permCodes:[...]}` |
+| GET | `/api/admin/permission` | `role:manage` | 权限目录（按模块分组，39 条） |
+| PUT | `/api/admin/user/{id}/roles` | `user:account:manage` | 账号角色覆盖 `{roleCodes:[...]}`（**强制该账号重新登录**） |
+| GET | `/api/teacher/order-forms/{id}` | `order:form:view:self` | 教师本人明细（**替换原来调用的 `/api/admin/order-forms/{id}`**） |
+| GET | `/api/secretary/order-forms/{id}` | `order:form:view:college` | 秘书本院明细（同上替换） |
+| POST | `/api/teacher/order-form/withdraw` | `order:form:submit` | 撤回（无 body；`pending_review → draft`） |
+| POST | `/api/admin/notice/tasks/{id}/send-now` | `notice:task:manage` | 立即发送一轮（返回统计） |
+| GET | `/api/notice/subscribe-config` | 登录即可 | `{subscribeTemplateId, popupQueueMax}`（模板未配置 → null） |
+| POST | `/api/notice/confirm-by-entry` | 登录即可 | 进入选书页即确认（幂等） |
+| GET | `/api/secretary/change/template` | `change:request:submit` | 异动导入模板（6 列） |
+
+**既有端点变更（前端必须同步）**
+
+| 端点 | 变更 |
+|------|------|
+| `/api/me`、`/api/me/permissions` | **超管返回 39 条权限**（BE-1 鉴权短路）。前端菜单仍按 `meta.roles` 过滤，不受影响；但**不要**用权限条数判断角色 |
+| `GET /api/admin/notice/tasks` | 新增可选 `semesterId`（缺省 = active 学期） |
+| `POST /api/secretary/change/import` | 响应由同步结果体改为 **`{batchId}`**（异步批次）；进度/错误明细走 `/api/batch/{id}` |
+| `GET /api/admin/change` | 新增可选 `changeType` 筛选；响应新增 `changeType` / `changeTypeLabel` |
+| `GET /api/teacher/order-form`、`/order-forms`、两个新明细端点 | 响应新增 `withdrawnAt`；`status` 可能出现 `draft`（撤回后） |
+| `POST /api/admin/export/notice` | 响应文件新增「渠道」列（班级之后） |
+| 教师端「我的提交记录」 | 待审核时展示「撤回修改」按钮（`POST /api/teacher/order-form/withdraw`），成功后表单回到可编辑（`draft`）并提示 `withdrawnAt` |
+
+> 通知侧行为变化：**新任务立即发首轮**（不必等次日 09:30）；窗口关闭会自动关闭该学期 active 任务；
+> 通知汇总导出的「渠道」列为 `订阅消息+弹窗` / `仅弹窗（未授权）` / `仅弹窗`。
+
+### A10. 两类协议错误码
 
 | code | HTTP | 场景 |
 |------|------|------|

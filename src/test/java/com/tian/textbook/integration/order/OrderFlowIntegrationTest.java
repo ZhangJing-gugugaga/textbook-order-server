@@ -74,6 +74,10 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
     private TestDataSeeder seeder;
     @Autowired
     private PlatformTransactionManager transactionManager;
+    @Autowired
+    private com.tian.textbook.system.audit.AuditService auditService;
+    @Autowired
+    private com.tian.textbook.semester.SemesterService semesterService;
 
     private OrderScenarioFactory.Scenario scenario;
     private Long adminId;
@@ -662,6 +666,146 @@ class OrderFlowIntegrationTest extends IntegrationTestBase {
         assertThat(option.getAuthor()).isEqualTo("测试作者");
         assertThat(option.getPress()).isEqualTo("测试出版社");
         assertThat(option.getPrice()).isEqualByComparingTo("45.00");
+    }
+
+    // ============ BE-4：教师主动撤回（下一流程审核前） ============
+
+    @Test
+    @DisplayName("BE-4 撤回：pending_review → draft（withdrawnAt 落库、submitted_at 清空、明细保留）")
+    void withdraw_pendingReview_backToDraft() {
+        seedScenario("WD1");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        assertThat(submitted.getStatus()).isEqualTo("pending_review");
+
+        var withdrawn = teacherOrderService.withdraw();
+
+        assertThat(withdrawn.getStatus()).isEqualTo("draft");
+        assertThat(withdrawn.getWithdrawnAt()).isNotNull();
+        assertThat(withdrawn.getSubmittedAt()).isNull();
+        // 明细保留：教师从当前内容继续改，不必重新录入
+        assertThat(withdrawn.getItems()).hasSize(1);
+        assertThat(withdrawn.getItems().get(0).getQuantity()).isEqualTo(50);
+        // 审计留痕
+        assertThat(auditService.query(null, null, com.tian.textbook.system.audit.AuditService.WITHDRAW, "order-form", null, null, 1, 20)
+                .list()).isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("BE-4 撤回：draft 可直接修改后重新提交，content_version 递增（审核端旧详情 CAS 落空）")
+    void withdraw_resubmit_bumpsContentVersion() {
+        seedScenario("WD2");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        Integer versionAfterSubmit = submitted.getContentVersion();
+        teacherOrderService.withdraw();
+
+        var resubmitted = teacherOrderService.submit(validItems());
+
+        assertThat(resubmitted.getStatus()).isEqualTo("pending_review");
+        assertThat(resubmitted.getContentVersion()).isGreaterThan(versionAfterSubmit);
+    }
+
+    @Test
+    @DisplayName("BE-4 撤回：撤回后管理员审核 → 409（审核谓词 status=pending_review 落空，结论不会被静默撤销）")
+    void withdraw_thenReview_returns409() {
+        seedScenario("WD3");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        teacherOrderService.withdraw();
+
+        asAdmin();
+        assertThatThrownBy(() -> teacherOrderService.review(submitted.getId(),
+                new OrderFormReviewRequest("pass", null, submitted.getContentVersion())))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT));
+        // 状态仍是 draft（未被审核改写）
+        assertThat(orderFormMapper.selectByIdSoft(submitted.getId()).getStatus()).isEqualTo("draft");
+    }
+
+    @Test
+    @DisplayName("BE-4 撤回：reviewed 终态不可撤回（文案含「请联系教材室」）")
+    void withdraw_reviewedTerminal_returns409() {
+        seedScenario("WD4");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        asAdmin();
+        teacherOrderService.review(submitted.getId(),
+                new OrderFormReviewRequest("pass", null, submitted.getContentVersion()));
+
+        asTeacher();
+        assertThatThrownBy(() -> teacherOrderService.withdraw())
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT))
+                .hasMessageContaining("请联系教材室");
+    }
+
+    @Test
+    @DisplayName("BE-4 撤回：窗口关闭 → 409 WINDOW_CLOSED（撤回是修改的前提，无补正豁免）")
+    void withdraw_windowClosed_returns409() {
+        seedScenario("WD5");
+        asTeacher();
+        teacherOrderService.submit(validItems());
+        semesterService.closeWindow(scenario.semesterId());
+
+        assertThatThrownBy(() -> teacherOrderService.withdraw())
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.WINDOW_CLOSED));
+    }
+
+    @Test
+    @DisplayName("BE-4 撤回：本学期无单的教师 → 404（无 id 入参，跨人撤回不可达）")
+    void withdraw_otherTeacher_returns404() {
+        seedScenario("WD6");
+        asTeacher();
+        teacherOrderService.submit(validItems());
+
+        // 另一位教师（本学期没有单）：撤回只能作用于本人，跨人撤回在接口层面不可达
+        var other = seeder.user("OT" + scenario.semesterId(), "其他教师", "13800000199",
+                scenario.collegeId(), null, 1, 0, 1, "TEACHER");
+        TestSecurity.authenticate(other.getId(), other.getUserNo(), other.getName(),
+                Set.of("TEACHER"), "TEACHER", seeder.permissionsOf("TEACHER"));
+
+        assertThatThrownBy(() -> teacherOrderService.withdraw())
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.NOT_FOUND))
+                .hasMessageContaining("本学期尚无征订单");
+    }
+
+    @Test
+    @DisplayName("BE-4 撤回：rejected 状态不可撤回（文案引导直接补正提交）")
+    void withdraw_rejected_returns409WithGuidance() {
+        seedScenario("WD7");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+        asAdmin();
+        teacherOrderService.review(submitted.getId(),
+                new OrderFormReviewRequest("reject", "数量与班级人数不符", submitted.getContentVersion()));
+
+        asTeacher();
+        assertThatThrownBy(() -> teacherOrderService.withdraw())
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(errorCodeOf(e)).isEqualTo(ErrorCode.STATE_CONFLICT))
+                .hasMessageContaining("可直接修改后补正提交");
+    }
+
+    @Test
+    @DisplayName("BE-3：教师/秘书明细端点复用同一归属校验（教师本人 200、秘书本院 200）")
+    void detailEndpoints_teacherAndSecretary() {
+        seedScenario("WD8");
+        asTeacher();
+        var submitted = teacherOrderService.submit(validItems());
+
+        // 教师读本人单：Service 归属校验放行（控制器权限码由 AuthorizationMatrixTest 覆盖）
+        assertThat(teacherOrderService.getFormDetail(submitted.getId()).getId()).isEqualTo(submitted.getId());
+
+        // 秘书本院：profile 归属同院 → 放行
+        var secretary = seeder.user("SC" + scenario.semesterId(), "秘书", "13800000198",
+                scenario.collegeId(), null, 1, 0, 1, "SECRETARY");
+        seeder.profile(secretary.getId(), scenario.semesterId(), scenario.collegeId(), null);
+        TestSecurity.authenticate(secretary.getId(), secretary.getUserNo(), secretary.getName(),
+                Set.of("SECRETARY"), "SECRETARY", seeder.permissionsOf("SECRETARY"));
+        assertThat(teacherOrderService.getFormDetail(submitted.getId()).getId()).isEqualTo(submitted.getId());
     }
 
     @Test

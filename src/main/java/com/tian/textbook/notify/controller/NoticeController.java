@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 通知确认闭环 · 用户侧（SPEC §11.5：/api/notice/**，仅需登录）。
@@ -64,5 +65,30 @@ public class NoticeController {
                                         @RequestBody(required = false) @Valid NoticeConfirmRequest request) {
         notifyService.confirm(taskId, request);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 「进入选书页即确认收到」（BE-5g）：把当前用户所有未确认且面向本人角色的 active 任务
+     * 按 {@code confirmed_by_entry} 补记确认（幂等；已有确认记录不动）。
+     *
+     * <p>前端在选书页加载成功后调用一次，不阻塞页面、失败静默（fail-open）。
+     * 弹窗仍为主触达——已被入口确认的任务不再出现在弹窗队列（属预期）。</p>
+     */
+    @PostMapping("/confirm-by-entry")
+    @PreAuthorize("isAuthenticated()")
+    public ApiResponse<Map<String, Object>> confirmByEntry() {
+        return ApiResponse.ok(Map.of("confirmed", notifyService.confirmByEntry()));
+    }
+
+    /**
+     * 通知配置下发（BE-5e）：小程序/Web 需要的订阅模板 id 与弹窗队列上限。
+     *
+     * <p>{@code subscribeTemplateId} 为空表示部署未配置模板（前端不应发起订阅授权，
+     * 触达退回「弹窗 + unauthorized 线下兜底」）。</p>
+     */
+    @GetMapping("/subscribe-config")
+    @PreAuthorize("isAuthenticated()")
+    public ApiResponse<Map<String, Object>> subscribeConfig() {
+        return ApiResponse.ok(notifyService.subscribeConfig());
     }
 }

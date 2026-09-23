@@ -36,11 +36,13 @@ public interface ChangeRequestMapper extends BaseMapper<ChangeRequest> {
             @Param("status") String status,
             @Param("batchNo") String batchNo,
             @Param("type") String type,
+            @Param("changeType") String changeType,
             @Param("offset") long offset,
             @Param("limit") long limit);
 
     long countByFilter(@Param("semesterId") Long semesterId,
                        @Param("status") String status,
                        @Param("batchNo") String batchNo,
-                       @Param("type") String type);
+                       @Param("type") String type,
+                       @Param("changeType") String changeType);
 }

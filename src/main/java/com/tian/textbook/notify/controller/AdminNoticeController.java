@@ -7,8 +7,7 @@ import com.tian.textbook.notify.dto.NoticeProgressResponse;
 import com.tian.textbook.notify.dto.NoticeTaskCreateRequest;
 import com.tian.textbook.notify.dto.NoticeTaskListItem;
 import com.tian.textbook.notify.service.NotifyService;
-import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
+import jakarta.validation.Valid;import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,11 +32,15 @@ public class AdminNoticeController {
 
     private final NotifyService notifyService;
 
-    /** active 学期任务列表（含 closed 历史，id DESC） */
+    /**
+     * 任务列表：{@code semesterId} 缺省 = 当前 active 学期（含 closed 历史，id DESC）；
+     * 显式传入可查历史/已归档学期的任务（BE-5d）。
+     */
     @GetMapping("/tasks")
     @PreAuthorize("hasAuthority('notice:task:view')")
-    public ApiResponse<List<NoticeTaskListItem>> tasks() {
-        return ApiResponse.ok(notifyService.listTasks());
+    public ApiResponse<List<NoticeTaskListItem>> tasks(
+            @RequestParam(required = false) Long semesterId) {
+        return ApiResponse.ok(notifyService.listTasks(semesterId));
     }
 
     /** 手动创建（同学期已有 active 任务 → 409 NOTICE_TASK_EXISTS） */
@@ -45,6 +48,19 @@ public class AdminNoticeController {
     @PreAuthorize("hasAuthority('notice:task:manage')")
     public ApiResponse<NoticeTaskListItem> create(@Valid @RequestBody NoticeTaskCreateRequest request) {
         return ApiResponse.ok(notifyService.createTask(request));
+    }
+
+    /**
+     * 立即发送一轮订阅消息（BE-5b）：管理员点「创建并发送」后不必等下一个调度周期。
+     *
+     * <p>同步执行（逐条独立事务，2000 人内数十秒量级，前端需 loading）；任务已关闭 → 409；
+     * 窗口非开放 → 409 {@code WINDOW_CLOSED}。响应为本轮统计
+     * {@code {roundNo, total, sent, unauthorized, failed, skipped, skippedReason}}。</p>
+     */
+    @PostMapping("/tasks/{id}/send-now")
+    @PreAuthorize("hasAuthority('notice:task:manage')")
+    public ApiResponse<NotifyService.ResendStats> sendNow(@PathVariable Long id) {
+        return ApiResponse.ok(notifyService.sendNow(id));
     }
 
     /** 手动关闭（status=closed + closed_by/closed_at + 审计） */

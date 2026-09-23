@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS sys_user_token (
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL,
   deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_token_hash (token_hash, deleted),
   KEY idx_token_user (user_id, revoked)
@@ -62,6 +64,8 @@ CREATE TABLE IF NOT EXISTS sys_role (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_role_code (role_code, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='角色';
 
@@ -72,13 +76,17 @@ CREATE TABLE IF NOT EXISTS sys_permission (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_perm_code (perm_code, deleted)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='权限码（37 条种子见 db/data-permission.sql）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='权限码（39 条种子见 db/data-permission.sql：37 条契约冻结 + BE-2 角色管理 2 条）';
 
 CREATE TABLE IF NOT EXISTS sys_user_role (
   id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NOT NULL, role_id BIGINT NOT NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), created_by BIGINT DEFAULT NULL,
   deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_user_role (user_id, role_id, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='用户-角色（多角色 = 多行）';
 
@@ -86,6 +94,8 @@ CREATE TABLE IF NOT EXISTS sys_role_permission (
   id BIGINT NOT NULL AUTO_INCREMENT, role_id BIGINT NOT NULL, perm_id BIGINT NOT NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), created_by BIGINT DEFAULT NULL,
   deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_role_perm (role_id, perm_id, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='角色-权限';
 
@@ -106,6 +116,8 @@ CREATE TABLE IF NOT EXISTS major (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_major (college_id, name, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='专业';
 
@@ -116,6 +128,8 @@ CREATE TABLE IF NOT EXISTS school_class (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_class (major_id, name, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='行政班（无教学班，需求 14）';
 
@@ -132,6 +146,8 @@ CREATE TABLE IF NOT EXISTS semester (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_semester_name (name, deleted),
   UNIQUE KEY uk_semester_active (active_flag) COMMENT '同刻仅一个 active（DB 层保证，W1）'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='学期（含窗口引擎字段）';
@@ -143,6 +159,8 @@ CREATE TABLE IF NOT EXISTS user_semester_profile (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_usp (user_id, semester_id, deleted),
   KEY idx_usp_sem_college (semester_id, college_id), KEY idx_usp_sem_class (semester_id, class_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='按学期归属真源（W6，双缓冲的关键）';
@@ -166,6 +184,8 @@ CREATE TABLE IF NOT EXISTS course (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_course (semester_id, code, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='课程（学期域）';
 
@@ -175,6 +195,8 @@ CREATE TABLE IF NOT EXISTS teacher_course (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_tc (semester_id, teacher_id, course_id, class_id, deleted),
   KEY idx_tc_class (semester_id, class_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='任课关系（学期域；征订范围即此表，W17）';
@@ -183,14 +205,17 @@ CREATE TABLE IF NOT EXISTS teacher_course (
 CREATE TABLE IF NOT EXISTS order_form (
   id BIGINT NOT NULL AUTO_INCREMENT, semester_id BIGINT NOT NULL, teacher_id BIGINT NOT NULL,
   status VARCHAR(24) NOT NULL DEFAULT 'draft'
-    COMMENT 'draft/submitted/rejected_auto/rejected/pending_review/reviewed',
+    COMMENT 'draft/pending_review/reviewed（终态）/rejected/rejected_auto；submitted 为历史死值（BE-8）',
   field_check_result JSON DEFAULT NULL COMMENT '[{field,rule,message}]（契约冻结项）',
   review_by BIGINT DEFAULT NULL, review_at DATETIME(3) DEFAULT NULL, review_note VARCHAR(200) DEFAULT NULL,
   submitted_at DATETIME(3) DEFAULT NULL, correct_deadline DATETIME(3) DEFAULT NULL COMMENT '补正截止（关窗后 7 天，W4）',
+  withdrawn_at DATETIME(3) DEFAULT NULL COMMENT '最近一次主动撤回时间（BE-4：下一流程审核前可撤回为 draft）',
   content_version INT NOT NULL DEFAULT 0 COMMENT '内容版本：教师每次整单覆盖 +1，审核 CAS 谓词之一（防审核对象漂移）',
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_form (semester_id, teacher_id, deleted) COMMENT '一人一学期一单（W9）',
   KEY idx_form_sem (semester_id, status),
@@ -203,6 +228,8 @@ CREATE TABLE IF NOT EXISTS order_form_item (
   quantity INT NOT NULL, created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_item (form_id, course_id, class_id, textbook_id, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='征订明细（课程×班级×教材×数量）';
 
@@ -214,6 +241,8 @@ CREATE TABLE IF NOT EXISTS student_order (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uk_stu_order (semester_id, student_id, deleted) COMMENT '一人一学期一单（W9）',
   KEY idx_stu_order_student (student_id, id) COMMENT '本人历史选购（selectStudentOrders：WHERE student_id ORDER BY id DESC）'
@@ -225,15 +254,18 @@ CREATE TABLE IF NOT EXISTS student_order_item (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_stu_item (order_id, textbook_id, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='选购明细';
 
 CREATE TABLE IF NOT EXISTS change_request (
   id BIGINT NOT NULL AUTO_INCREMENT, semester_id BIGINT NOT NULL,
   type VARCHAR(16) NOT NULL COMMENT 'student/teacher', target_user_id BIGINT NOT NULL,
+  change_type VARCHAR(24) DEFAULT NULL COMMENT 'MAJOR_TRANSFER/GRADE_REPEAT/UPGRADE/OTHER（BE-7a，历史数据为 NULL）',
   payload_json JSON NOT NULL COMMENT '变更前后值；批量时逐行一条',
   status VARCHAR(24) NOT NULL DEFAULT 'pending_field_check'
-    COMMENT 'pending_field_check/pending_review/approved/rejected',
+    COMMENT 'pending_review/approved/rejected；pending_field_check 为历史值（字段审查已改为提交时同步完成，BE-7d）',
   field_check_result JSON DEFAULT NULL,
   batch_no VARCHAR(40) DEFAULT NULL COMMENT '批量导入批次号（Q10）',
   applicant_id BIGINT NOT NULL, reviewer_id BIGINT DEFAULT NULL, review_at DATETIME(3) DEFAULT NULL,
@@ -241,6 +273,8 @@ CREATE TABLE IF NOT EXISTS change_request (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), KEY idx_change_batch (batch_no), KEY idx_change_status (semester_id, status),
   KEY idx_change_applicant (applicant_id, id) COMMENT '我的提交记录（selectMyRequests：WHERE applicant_id ORDER BY id DESC）'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='异动审批（逐条/批量同链）';
@@ -258,6 +292,8 @@ CREATE TABLE IF NOT EXISTS import_batch (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), KEY idx_batch (biz_type, status), KEY idx_batch_no (batch_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='导入批次';
 
@@ -272,10 +308,28 @@ CREATE TABLE IF NOT EXISTS export_task (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), KEY idx_export_status (status), KEY idx_export_token (download_token)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='导出任务（Q16/W18）';
 
 -- ============ 6. 通知 ============
+CREATE TABLE IF NOT EXISTS notice_record_history (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  record_id BIGINT NOT NULL COMMENT '原 notice_record.id',
+  task_id BIGINT NOT NULL, semester_id BIGINT NOT NULL, user_id BIGINT NOT NULL,
+  round_no INT DEFAULT NULL, sent_at DATETIME(3) DEFAULT NULL,
+  send_status VARCHAR(24) DEFAULT NULL, confirmed_at DATETIME(3) DEFAULT NULL,
+  archived_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
+  PRIMARY KEY (id), UNIQUE KEY uk_history_record (record_id, deleted),
+  KEY idx_history_task (task_id, user_id), KEY idx_history_sem (semester_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='通知历史（学期归档迁移目标，BE-5d）';
+
 CREATE TABLE IF NOT EXISTS notice_task (
   id BIGINT NOT NULL AUTO_INCREMENT, semester_id BIGINT NOT NULL,
   title VARCHAR(120) NOT NULL, content VARCHAR(500) NOT NULL,
@@ -289,6 +343,8 @@ CREATE TABLE IF NOT EXISTS notice_task (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), KEY idx_task (semester_id, status),
   UNIQUE KEY uk_task_active (semester_id, active_flag, deleted)
     COMMENT '同学期至多 1 个 active 任务（W18，DB 层兜底；NULL 不参与唯一性，故 closed 行不受限）'
@@ -296,15 +352,19 @@ CREATE TABLE IF NOT EXISTS notice_task (
 
 CREATE TABLE IF NOT EXISTS notice_record (
   id BIGINT NOT NULL AUTO_INCREMENT, task_id BIGINT NOT NULL, user_id BIGINT NOT NULL COMMENT '主体=用户（含教师/秘书，W7）',
+  semester_id BIGINT DEFAULT NULL COMMENT '所属学期（BE-5d：学期归档时按此列迁移到 notice_record_history）',
   round_no INT DEFAULT NULL COMMENT '第几轮（确认记录为空）',
   sent_at DATETIME(3) DEFAULT NULL,
-  send_status VARCHAR(16) DEFAULT NULL COMMENT 'sent/unauthorized/failed',
+  send_status VARCHAR(24) DEFAULT NULL COMMENT 'sent/unauthorized/failed/confirmed/confirmed_by_entry',
   confirmed_at DATETIME(3) DEFAULT NULL,
   confirm_flag TINYINT GENERATED ALWAYS AS (IF(confirmed_at IS NOT NULL AND deleted = 0, 1, NULL)) STORED,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_notice_round (task_id, user_id, round_no, deleted),
+  KEY idx_record_semester (semester_id) COMMENT '学期归档迁移扫描（BE-5d）',
   UNIQUE KEY uk_notice_confirm (task_id, user_id, confirm_flag)
     COMMENT '确认记录唯一（round_no 为 NULL 不参与 uk_notice_round 唯一性，故单列生成列兜底；并发重复确认只会插入一行）',
   KEY idx_notice_confirm (task_id, user_id, confirmed_at)
@@ -317,6 +377,8 @@ CREATE TABLE IF NOT EXISTS system_config (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), UNIQUE KEY uk_config_key (config_key, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='系统配置（重发参数唯一真源，W8）';
 
@@ -325,6 +387,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
   action VARCHAR(64) NOT NULL COMMENT 'LOGIN/EXPORT/ACCOUNT/WINDOW/SEMESTER_SWITCH/REVIEW/CHANGE/CONFIG…',
   resource VARCHAR(64) DEFAULT NULL, resource_id VARCHAR(64) DEFAULT NULL,
   detail_json JSON DEFAULT NULL, ip VARCHAR(45) DEFAULT NULL, at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
+  reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), KEY idx_audit_user (user_id, at), KEY idx_audit_action (action, at),
   KEY idx_audit_resource (resource, resource_id, at) COMMENT '窗口变更记录查询（selectByResource）'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='审计日志（只写不改；不含密码/token）';

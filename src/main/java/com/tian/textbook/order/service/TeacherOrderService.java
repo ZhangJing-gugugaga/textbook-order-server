@@ -81,6 +81,12 @@ public class TeacherOrderService {
     /** 已通过审核（终态，不允许教师重提覆盖） */
     private static final String REVIEWED = "reviewed";
 
+    /** 待审核（下一流程审核未完成；BE-4 撤回的准入状态） */
+    private static final String PENDING_REVIEW = "pending_review";
+
+    /** 草稿（BE-4 起由撤回写入；此前是死值） */
+    private static final String DRAFT = "draft";
+
     private final OrderFormMapper orderFormMapper;
     private final OrderFormItemMapper orderFormItemMapper;
     private final FieldCheckService fieldCheckService;
@@ -291,6 +297,83 @@ public class TeacherOrderService {
         orderFormMapper.bumpContentVersion(form.getId());
         log.info("教师征订提交成功: formId={}, teacherId={}, items={}", form.getId(), teacherId, request.items().size());
         return buildDetailVO(orderFormMapper.selectByIdSoft(form.getId()));
+    }
+
+    // ============ 3.1 POST /api/teacher/order-form/withdraw（BE-4） ============
+
+    /**
+     * 主动撤回（下一流程审核完成前）：{@code pending_review → draft}，修改后可重新提交。
+     *
+     * <p>甲方决策「教师应可在下一流程审核前主动撤回修改」。要点：</p>
+     * <ol>
+     *   <li>取当前 active 学期 + 本人表单，不存在 → 404「本学期尚无征订单」；</li>
+     *   <li><b>事务内先 {@code selectByIdForUpdate} 加行锁</b>（与管理员审核串行化，复用提交路径
+     *       的既有模式）：并发时要么审核先提交（撤回读到 reviewed → 409），要么撤回先提交
+     *       （审核 CAS 的 {@code status='pending_review'} 谓词落空 → 409），审批结论不会被静默撤销；</li>
+     *   <li><b>归属校验</b>：非本人 → 403 + 审计（否则教师 A 可撤回教师 B 的表单）；</li>
+     *   <li>状态门禁：仅 pending_review 可撤回，其余状态按档给文案；</li>
+     *   <li>生效写操作：status=draft + withdrawn_at=now + submitted_at=NULL + 清空审核/补正状态；
+     *       <b>明细不动</b>（教师从当前内容继续改）、<b>content_version 不 bump</b>
+     *       （状态谓词已足以让审核 CAS 落空，避免无意义版本跳动）。</li>
+     * </ol>
+     */
+    @Transactional
+    public OrderFormDetailVO withdraw() {
+        Long semesterId = requireSemester();
+        Long teacherId = requireCurrentUserId();
+        // 窗口校验：@WithinWindow 注解 + WindowGuard 双保险（无补正豁免——撤回是修改的前提，
+        // 窗口关了就不该还能改；与提交路径同一写法）
+        windowGuard.assertWithinWindow(WithinWindow.Exemption.NONE);
+        OrderForm existing = orderFormMapper.selectBySemesterAndTeacher(semesterId, teacherId);
+        if (existing == null) {
+            // 无 id 入参：只能撤回本人的单，跨人撤回在接口层面不可达（比 403 更严）
+            throw new BizException(ErrorCode.NOT_FOUND, "本学期尚无征订单");
+        }
+        OrderForm form = orderFormMapper.selectByIdForUpdate(existing.getId());
+        if (form == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "征订单不存在");
+        }
+        if (!teacherId.equals(form.getTeacherId())) {
+            auditService.record(AuditService.WITHDRAW, "order-form", String.valueOf(form.getId()),
+                    Map.of("reason", "越权撤回", "teacherId", teacherId));
+            throw new BizException(ErrorCode.RESOURCE_FORBIDDEN);
+        }
+        String status = form.getStatus() == null ? "" : form.getStatus();
+        if (!PENDING_REVIEW.equals(status)) {
+            throw new BizException(ErrorCode.STATE_CONFLICT, withdrawRejectedMessage(status));
+        }
+        LocalDateTime now = AppTime.now();
+        int rows = orderFormMapper.update(null, Wrappers.<OrderForm>lambdaUpdate()
+                .eq(OrderForm::getId, form.getId())
+                .eq(OrderForm::getStatus, PENDING_REVIEW)
+                .set(OrderForm::getStatus, DRAFT)
+                .set(OrderForm::getWithdrawnAt, now)
+                .set(OrderForm::getSubmittedAt, null)
+                .set(OrderForm::getFieldCheckResult, null)
+                .set(OrderForm::getReviewBy, null)
+                .set(OrderForm::getReviewAt, null)
+                .set(OrderForm::getReviewNote, null)
+                .set(OrderForm::getCorrectDeadline, null)
+                .set(OrderForm::getUpdatedBy, teacherId));
+        if (rows == 0) {
+            // 行锁已排除并发，这里只可能是状态在锁外被改（例如另一请求刚审核完）
+            throw new BizException(ErrorCode.STATE_CONFLICT, "存在更新的表单状态，请刷新后重试");
+        }
+        int itemCount = orderFormItemMapper.selectByFormId(form.getId()).size();
+        auditService.record(AuditService.WITHDRAW, "order-form", String.valueOf(form.getId()),
+                Map.of("op", "withdraw", "semesterId", semesterId, "itemCount", itemCount));
+        log.info("教师征订撤回: formId={}, teacherId={}, items={}", form.getId(), teacherId, itemCount);
+        return buildDetailVO(orderFormMapper.selectByIdSoft(form.getId()));
+    }
+
+    /** 撤回被拒时的分档文案（让教师知道下一步该做什么，而不是只看到「状态冲突」）。 */
+    private static String withdrawRejectedMessage(String status) {
+        return switch (status) {
+            case REVIEWED -> "已通过审核，为终态不可修改；如需变更请联系教材室线下处理";
+            case DRAFT -> "当前为草稿状态，可直接修改后提交";
+            case "rejected", "rejected_auto" -> "表单已被驳回，可直接修改后补正提交";
+            default -> "当前状态不可撤回（仅待审核的表单可撤回）";
+        };
     }
 
     // ============ 4. GET /api/teacher/order-forms ============
@@ -597,6 +680,7 @@ public class TeacherOrderService {
         vo.setReviewBy(form.getReviewBy());
         vo.setReviewNote(form.getReviewNote());
         vo.setCorrectDeadline(form.getCorrectDeadline());
+        vo.setWithdrawnAt(form.getWithdrawnAt());
         // 审核端据此回传做 CAS（防审核对象漂移，S3）
         vo.setContentVersion(form.getContentVersion());
 

@@ -15,8 +15,9 @@ import java.util.Map;
 /**
  * 异动审批（change_request，逐条/批量同链，Q10 批量共享 batch_no）。
  *
- * <p>状态机：pending_field_check → pending_review → approved（写 user_semester_profile
- * active 学期归属，W15 立即生效）/ rejected（理由必填）。</p>
+ * <p>状态机：pending_review → approved（写 user_semester_profile active 学期归属，W15 立即生效）
+ * / rejected（理由必填）。{@code pending_field_check} 为历史值：字段审查自 2026-09-22 起在提交时
+ * 同步完成（不通过即落 rejected），该状态不再产生（BE-7d）。</p>
  */
 @Data
 @TableName(value = "change_request", autoResultMap = true)
@@ -27,8 +28,11 @@ public class ChangeRequest {
 
     private Long semesterId;
 
-    /** student/teacher */
+    /** student/teacher（异动**对象**） */
     private String type;
+
+    /** 异动类型（BE-7a：MAJOR_TRANSFER/GRADE_REPEAT/UPGRADE/OTHER；历史数据为 null） */
+    private String changeType;
 
     private Long targetUserId;
 

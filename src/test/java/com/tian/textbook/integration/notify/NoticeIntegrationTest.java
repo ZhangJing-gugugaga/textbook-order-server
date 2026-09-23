@@ -1,7 +1,11 @@
 package com.tian.textbook.integration.notify;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.alibaba.excel.EasyExcel;
+import com.tian.textbook.common.error.BizException;
+import com.tian.textbook.common.error.ErrorCode;
 import com.tian.textbook.common.semester.SemesterContextHolder;
+import com.tian.textbook.importexport.excel.NoticeSummaryExportRow;
 import com.tian.textbook.notify.dto.NoticeTaskCreateRequest;
 import com.tian.textbook.notify.entity.NoticeRecord;
 import com.tian.textbook.notify.entity.NoticeTask;
@@ -44,6 +48,10 @@ class NoticeIntegrationTest extends IntegrationTestBase {
     private SemesterMapper semesterMapper;
     @Autowired
     private TestDataSeeder seeder;
+    @Autowired
+    private com.tian.textbook.semester.SemesterService semesterService;
+    @Autowired
+    private com.tian.textbook.importexport.service.ExportDataWriter exportDataWriter;
 
     private Long semesterId;
     private Long studentId;
@@ -63,6 +71,9 @@ class NoticeIntegrationTest extends IntegrationTestBase {
         Semester semester = seeder.semester("2026-2027-1", null, null,
                 LocalDateTime.now().minusDays(1), LocalDateTime.now().plusDays(7), 1, 1);
         semesterMapper.activateIfDraft(semester.getId(), semester.getVersion());
+        // BE-5a 起重发前校验窗口（非 open 不发送、不写记录）→ 本类多数用例聚焦重发/轮次语义，
+        // 统一把窗口置为进行中；窗口门禁本身由 windowClosed_* 用例覆盖。
+        openWindow(semester.getId());
         semesterId = semester.getId();
 
         var student = seeder.user("ST1", "学生一", "13800000001", college.getId(), null,
@@ -93,6 +104,22 @@ class NoticeIntegrationTest extends IntegrationTestBase {
 
     private NoticeTaskCreateRequest createRequest(String title, String content) {
         return new NoticeTaskCreateRequest(title, content, "STUDENT");
+    }
+
+    /** 把学期窗口置为「进行中」（channel_open=1 + window_status=open） */
+    private void openWindow(Long id) {
+        semesterMapper.update(null, Wrappers.<Semester>lambdaUpdate()
+                .eq(Semester::getId, id)
+                .set(Semester::getChannelOpen, 1)
+                .set(Semester::getWindowStatus, "open"));
+    }
+
+    /** 把学期窗口置为「已截止」（channel_open=0 + window_status=closed） */
+    private void closeWindow(Long id) {
+        semesterMapper.update(null, Wrappers.<Semester>lambdaUpdate()
+                .eq(Semester::getId, id)
+                .set(Semester::getChannelOpen, 0)
+                .set(Semester::getWindowStatus, "closed"));
     }
 
     private List<NoticeTask> activeTasks() {
@@ -360,6 +387,187 @@ class NoticeIntegrationTest extends IntegrationTestBase {
                     assertThat(item.getSource()).isEqualTo("manual");
                     assertThat(item.getConfirmedAt()).isNotNull();
                 });
+    }
+
+    // ============ BE-5：窗口联动 / 立即发送 / 间隔 / 归档 / 渠道 / 配置 / 入口确认 ============
+
+    @Test
+    @DisplayName("BE-5a：窗口关闭后重发不产生任何记录（此前会继续给未确认学生发订阅消息）")
+    void windowClosed_resendWritesNoRecords() {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("窗口关闭后重发", "不应发送"));
+
+        closeWindow(semesterId);
+
+        var stats = notifyService.resendTask(noticeTaskMapper.selectByIdSoft(task.getId()));
+        assertThat(stats.skippedReason()).isNotNull();
+        assertThat(noticeRecordMapper.selectList(Wrappers.<NoticeRecord>lambdaQuery()
+                .eq(NoticeRecord::getTaskId, task.getId()))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("BE-5a：窗口提前截止 → 该学期 active 通知任务自动关闭（closed_by 为空 = 系统关闭）")
+    void windowClosed_autoClosesActiveTask() {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("自动关闭", "内容"));
+
+        semesterService.closeWindow(semesterId);
+
+        NoticeTask closed = noticeTaskMapper.selectByIdSoft(task.getId());
+        assertThat(closed.getStatus()).isEqualTo("closed");
+        assertThat(closed.getClosedBy()).as("系统关闭留空").isNull();
+        assertThat(closed.getClosedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("BE-5b：立即发送返回本轮统计；任务已关闭 → 409；窗口未开放 → 409 WINDOW_CLOSED")
+    void sendNow_statsAndGuards() {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("立即发送", "内容"));
+
+        var stats = notifyService.sendNow(task.getId());
+        assertThat(stats.roundNo()).isEqualTo(1);
+        assertThat(stats.total()).isEqualTo(1); // 目标 = 1 名学生
+        assertThat(stats.unauthorized()).isEqualTo(1); // 未配置微信 → unauthorized
+        assertThat(stats.skippedReason()).isNull();
+
+        notifyService.closeTask(task.getId());
+        assertThatThrownBy(() -> notifyService.sendNow(task.getId()))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("通知任务已关闭");
+
+        var second = notifyService.createTask(createRequest("窗口校验", "内容"));
+        closeWindow(semesterId);
+        assertThatThrownBy(() -> notifyService.sendNow(second.getId()))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(((BizException) e).getErrorCode())
+                        .isEqualTo(ErrorCode.WINDOW_CLOSED));
+    }
+
+    @Test
+    @DisplayName("BE-5c：间隔判定依据 lastSentAt —— 新任务无记录（立即发首轮），发过一轮后有值")
+    void intervalJudgement_usesLastSentAt() {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("间隔判定", "内容"));
+
+        assertThat(notifyService.lastSentAt(task.getId()))
+                .as("新任务无发送记录 → 调度立即发首轮（不再等 24h）").isNull();
+
+        notifyService.resendTask(noticeTaskMapper.selectByIdSoft(task.getId()));
+
+        assertThat(notifyService.lastSentAt(task.getId()))
+                .as("发过一轮 → 后续按 interval_hours 判定").isNotNull();
+    }
+
+    @Test
+    @DisplayName("BE-5d：学期归档迁移通知记录到历史表，主表清空，进度仍可读到（UNION）")
+    void archive_migratesRecordsToHistory() {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("归档迁移", "内容"));
+        notifyService.resendTask(noticeTaskMapper.selectByIdSoft(task.getId()));
+        long before = noticeRecordMapper.countBySemester(semesterId);
+        assertThat(before).isPositive();
+
+        long migrated = notifyService.archiveSemesterRecords(semesterId);
+
+        assertThat(migrated).isEqualTo(before);
+        assertThat(noticeRecordMapper.countBySemester(semesterId)).as("主表已清空").isZero();
+        assertThat(noticeRecordMapper.countHistoryBySemester(semesterId)).isEqualTo(before);
+        // 进度查询走 UNION：归档后仍能统计到历史记录（否则管理端进度会突然归零）
+        assertThat(notifyService.taskProgress(task.getId()).getUnauthorized()).isEqualTo(before);
+        // 幂等：重复归档不报错、不重复迁移
+        assertThat(notifyService.archiveSemesterRecords(semesterId)).isZero();
+        assertThat(noticeRecordMapper.countHistoryBySemester(semesterId)).isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("BE-5f：通知汇总导出的「渠道」列取值（订阅消息+弹窗 / 仅弹窗（未授权））")
+    void noticeExport_channelColumn() throws Exception {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("渠道列", "内容"));
+        // 学生：unauthorized 轮次（未配置微信）→ 仅弹窗（未授权）
+        notifyService.resendTask(noticeTaskMapper.selectByIdSoft(task.getId()));
+        // 教师：手工补一条 sent 记录 → 订阅消息+弹窗（教师本不在 STUDENT 发送范围）
+        NoticeRecord sent = new NoticeRecord();
+        sent.setTaskId(task.getId());
+        sent.setUserId(teacherId);
+        sent.setSemesterId(semesterId);
+        sent.setRoundNo(1);
+        sent.setSentAt(LocalDateTime.now());
+        sent.setSendStatus("sent");
+        sent.setDeleted(0L);
+        noticeRecordMapper.insert(sent);
+
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        exportDataWriter.writeNotice(out, task.getId(), semesterId);
+        List<NoticeSummaryExportRow> rows = EasyExcel
+                .read(new java.io.ByteArrayInputStream(out.toByteArray()))
+                .head(NoticeSummaryExportRow.class)
+                .sheet().doReadSync();
+
+        java.util.Map<String, String> channelByUserNo = new java.util.HashMap<>();
+        for (NoticeSummaryExportRow row : rows) {
+            channelByUserNo.put(row.getUserNo(), row.getChannel());
+        }
+        assertThat(channelByUserNo).containsEntry("ST1", "仅弹窗（未授权）");
+        assertThat(channelByUserNo).containsEntry("TH1", "订阅消息+弹窗");
+        assertThat(rows).as("渠道列非空").allSatisfy(row -> assertThat(row.getChannel()).isNotBlank());
+    }
+
+    @Test
+    @DisplayName("BE-5e：subscribe-config 下发模板 id（未配置 → null）与弹窗队列上限")
+    void subscribeConfig_unconfiguredTemplateReturnsNull() {
+        seed();
+        asStudent();
+
+        java.util.Map<String, Object> config = notifyService.subscribeConfig();
+
+        assertThat(config).containsEntry("subscribeTemplateId", null);
+        assertThat(config.get("popupQueueMax")).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("BE-5g：进入选书页即确认（confirmed_by_entry、幂等、已有确认不动）")
+    void confirmByEntry_idempotent() {
+        seed();
+        asAdmin();
+        var task = notifyService.createTask(createRequest("入口确认", "内容"));
+
+        asStudent();
+        assertThat(notifyService.confirmByEntry()).isEqualTo(1);
+
+        assertThat(notifyService.listUnconfirmed()).as("入口确认后移出未确认队列").isEmpty();
+        List<NoticeRecord> confirmed = noticeRecordMapper.selectList(Wrappers.<NoticeRecord>lambdaQuery()
+                .eq(NoticeRecord::getTaskId, task.getId())
+                .eq(NoticeRecord::getUserId, studentId)
+                .isNotNull(NoticeRecord::getConfirmedAt));
+        assertThat(confirmed).singleElement()
+                .satisfies(r -> assertThat(r.getSendStatus()).isEqualTo("confirmed_by_entry"));
+
+        // 幂等：再次调用不新增确认记录
+        assertThat(notifyService.confirmByEntry()).isZero();
+        assertThat(noticeRecordMapper.selectList(Wrappers.<NoticeRecord>lambdaQuery()
+                .eq(NoticeRecord::getTaskId, task.getId())
+                .eq(NoticeRecord::getUserId, studentId)
+                .isNotNull(NoticeRecord::getConfirmedAt))).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("BE-5d：任务列表可按学期查询（缺省 = 当前 active 学期）")
+    void listTasks_bySemester() {
+        seed();
+        asAdmin();
+        notifyService.createTask(createRequest("列表查询", "内容"));
+
+        assertThat(notifyService.listTasks()).hasSize(1);
+        assertThat(notifyService.listTasks(semesterId)).hasSize(1);
+        assertThat(notifyService.listTasks(999999L)).isEmpty();
     }
 
     @Test

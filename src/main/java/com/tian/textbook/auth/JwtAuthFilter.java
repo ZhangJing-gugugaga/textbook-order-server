@@ -81,7 +81,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             }
             CurrentUser principal = new CurrentUser(userId, user.getUserNo(), user.getName(),
                     roleCodes, currentRole, user.getRoleVersion(),
-                    authUserService.permissionsOf(roles, currentRole),
+                    // 超管短路：ADMIN 在鉴权层持有全部权限码（BE-1，甲方决策「超管可以做所有事情」）
+                    authUserService.permissionsFor(roles, currentRole),
                     Integer.valueOf(1).equals(user.getMustChangePassword()),
                     Integer.valueOf(1).equals(user.getFirstLoginVerified()));
             var authentication = new UsernamePasswordAuthenticationToken(principal, null,

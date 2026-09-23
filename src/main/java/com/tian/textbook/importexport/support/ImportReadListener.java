@@ -45,11 +45,26 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
         void flush(List<T> rows, ImportRunContext ctx);
     }
 
+    /**
+     * 已落库行的业务结论（可选）：某些导入类型「行落库了但仍算错误行」。
+     *
+     * <p>异动导入（BE-7b）即如此：字段审查不通过的行会以 {@code rejected} 落库（申请人可见原因），
+     * 同时要计入批次错误明细供下载核对——只靠 validator 返回值无法表达「既不通过校验、
+     * 又必须写入」这一组合。</p>
+     */
+    @FunctionalInterface
+    public interface RowOutcome<T> {
+        /** @return 计为错误行的文案；null = 正常成功行 */
+        String errorMessage(T row);
+    }
+
     private final ImportRunContext ctx;
     private final ImportBatchMapper batchMapper;
     private final RowValidator<T> validator;
     private final RowFlusher<T> flusher;
     private final BiConsumer<ImportRunContext, ImportRunSummary> finalizer;
+    /** 已落库行的业务结论（可选）：返回错误文案的行计入错误明细，但数据已落库 */
+    private final RowOutcome<T> outcome;
 
     private final List<Map<String, Object>> errors = new ArrayList<>();
     private final List<NumberedRow<T>> buffer = new ArrayList<>();
@@ -60,11 +75,18 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
 
     public ImportReadListener(ImportRunContext ctx, ImportBatchMapper batchMapper, RowValidator<T> validator,
                               RowFlusher<T> flusher, BiConsumer<ImportRunContext, ImportRunSummary> finalizer) {
+        this(ctx, batchMapper, validator, flusher, finalizer, null);
+    }
+
+    public ImportReadListener(ImportRunContext ctx, ImportBatchMapper batchMapper, RowValidator<T> validator,
+                              RowFlusher<T> flusher, BiConsumer<ImportRunContext, ImportRunSummary> finalizer,
+                              RowOutcome<T> outcome) {
         this.ctx = ctx;
         this.batchMapper = batchMapper;
         this.validator = validator;
         this.flusher = flusher;
         this.finalizer = finalizer;
+        this.outcome = outcome;
     }
 
     @Override
@@ -105,7 +127,14 @@ public class ImportReadListener<T> extends AnalysisEventListener<T> {
         buffer.clear();
         try {
             flusher.flush(batch.stream().map(NumberedRow::data).toList(), ctx);
-            okRows += batch.size();
+            for (NumberedRow<T> row : batch) {
+                String businessError = outcome == null ? null : outcome.errorMessage(row.data());
+                if (businessError == null) {
+                    okRows++;
+                } else {
+                    addError(errorEntry(row.excelRow(), businessError));
+                }
+            }
         } catch (Exception e) {
             // 整批回滚（事务在 writer 内），错误行继续收集（SPEC §12）
             for (NumberedRow<T> row : batch) {

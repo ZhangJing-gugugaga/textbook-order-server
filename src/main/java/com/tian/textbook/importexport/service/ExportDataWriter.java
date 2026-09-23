@@ -11,6 +11,7 @@ import com.tian.textbook.importexport.excel.StudentSummaryExportRow;
 import com.tian.textbook.importexport.excel.SupplierExportRow;
 import com.tian.textbook.importexport.template.TemplateService;
 import com.tian.textbook.notify.mapper.NoticeRecordMapper;
+import com.tian.textbook.common.util.MapKeys;
 import com.tian.textbook.order.dto.StudentOrderSummaryRow;
 import com.tian.textbook.order.mapper.OrderFormItemMapper;
 import com.tian.textbook.order.mapper.StudentOrderItemMapper;
@@ -174,20 +175,22 @@ public class ExportDataWriter {
         List<Map<String, Object>> raw = noticeRecordMapper.selectTaskSummaryRows(taskId, semesterId);
         Map<Long, NoticeAgg> byUser = new LinkedHashMap<>();
         for (Map<String, Object> row : raw) {
-            Long userId = longValue(row.get("userId"));
+            // 列标签取值一律走 MapKeys.pick：H2 会把别名转成小写、MySQL 保留原样，
+            // 直接用 row.get("userId") 在 H2 上取不到值（导出会静默变成空表）
+            Long userId = longValue(MapKeys.pick(row, "userId"));
             if (userId == null) {
                 continue;
             }
             NoticeAgg agg = byUser.computeIfAbsent(userId, k -> new NoticeAgg(
-                    text(row.get("userNo")), text(row.get("name")),
-                    roleLabel(text(row.get("role"))), text(row.get("collegeName")),
-                    text(row.get("className"))));
-            Object roundNo = row.get("roundNo");
+                    text(MapKeys.pick(row, "userNo")), text(MapKeys.pick(row, "name")),
+                    roleLabel(text(MapKeys.pick(row, "role"))), text(MapKeys.pick(row, "collegeName")),
+                    text(MapKeys.pick(row, "className"))));
+            Object roundNo = MapKeys.pick(row, "roundNo");
             if (roundNo instanceof Number n && n.intValue() >= 1 && n.intValue() <= 5) {
                 agg.rounds.put(n.intValue(), new NoticeSummaryExportRow.Round(
-                        formatDateTime(row.get("sentAt")), text(row.get("sendStatus"))));
+                        formatDateTime(MapKeys.pick(row, "sentAt")), text(MapKeys.pick(row, "sendStatus"))));
             }
-            Object confirmedAt = row.get("confirmedAt");
+            Object confirmedAt = MapKeys.pick(row, "confirmedAt");
             if (confirmedAt instanceof LocalDateTime dt
                     && (agg.confirmedAt == null || dt.isAfter(agg.confirmedAt))) {
                 agg.confirmedAt = dt;
@@ -195,7 +198,8 @@ public class ExportDataWriter {
         }
         List<NoticeSummaryExportRow> rows = byUser.values().stream()
                 .map(agg -> NoticeSummaryExportRow.of(agg.userNo, agg.name, agg.role,
-                        agg.collegeName, agg.className, agg.rounds, agg.confirmedAt))
+                        agg.collegeName, agg.className, channelOf(agg.rounds),
+                        agg.rounds, agg.confirmedAt))
                 .toList();
         EasyExcel.write(out, NoticeSummaryExportRow.class).sheet("通知汇总").doWrite(rows);
     }
@@ -389,6 +393,32 @@ public class ExportDataWriter {
             this.isbn = isbn;
             this.title = title;
         }
+    }
+
+    /**
+     * 「渠道」列取值（BE-5f，D4 口径三值）：
+     * <ul>
+     *   <li>{@code 订阅消息+弹窗}：存在 {@code sent} 轮次（订阅消息真的发出去了）；</li>
+     *   <li>{@code 仅弹窗（未授权）}：无 {@code sent} 但存在 {@code unauthorized} 轮次
+     *       （未授权订阅 → 进线下兜底名单）；</li>
+     *   <li>{@code 仅弹窗}：无任何轮次记录（教师/秘书以弹窗为主触达，不写发送记录，Q8）。</li>
+     * </ul>
+     */
+    private static String channelOf(Map<Integer, NoticeSummaryExportRow.Round> rounds) {
+        boolean sent = false;
+        boolean unauthorized = false;
+        for (NoticeSummaryExportRow.Round round : rounds.values()) {
+            String status = round.sendStatus();
+            if ("sent".equals(status)) {
+                sent = true;
+            } else if ("unauthorized".equals(status)) {
+                unauthorized = true;
+            }
+        }
+        if (sent) {
+            return "订阅消息+弹窗";
+        }
+        return unauthorized ? "仅弹窗（未授权）" : "仅弹窗";
     }
 
     private static final class NoticeAgg {

@@ -24,6 +24,8 @@ import com.tian.textbook.notify.entity.NoticeTask;
 import com.tian.textbook.notify.mapper.NoticeRecordMapper;
 import com.tian.textbook.notify.mapper.NoticeTaskMapper;
 import com.tian.textbook.semester.entity.UserSemesterProfile;
+import com.tian.textbook.semester.entity.Semester;
+import com.tian.textbook.semester.mapper.SemesterMapper;
 import com.tian.textbook.semester.mapper.UserSemesterProfileMapper;
 import com.tian.textbook.system.audit.AuditService;
 import com.tian.textbook.system.config.ConfigService;
@@ -38,6 +40,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
@@ -82,6 +85,16 @@ public class NotifyService implements WindowChangeNotifier {
     public static final String STATUS_ACTIVE = "active";
     public static final String STATUS_CLOSED = "closed";
 
+    /** 确认类型：用户主动确认（POST /{taskId}/confirm） */
+    public static final String SEND_STATUS_CONFIRMED = "confirmed";
+    /** 确认类型：进入选书页即确认（BE-5g，D6） */
+    public static final String SEND_STATUS_CONFIRMED_BY_ENTRY = "confirmed_by_entry";
+
+    /** 学期归档分批行数（BE-5d：INSERT...SELECT → DELETE 循环） */
+    private static final int ARCHIVE_BATCH = 5000;
+    /** 归档循环上限（防异常情况下死循环；正常 1 轮搬完） */
+    private static final int ARCHIVE_MAX_ROUNDS = 10_000;
+
     /** 订阅消息跳转页面（小程序通知页） */
     private static final String NOTICE_PAGE = "pages/notice/index";
 
@@ -91,6 +104,8 @@ public class NotifyService implements WindowChangeNotifier {
     /** system_config 缺省时的兜底值（与 03 §10.1 清单一致） */
     private static final int DEFAULT_ROUND_LIMIT = 5;
     private static final int DEFAULT_INTERVAL_HOURS = 24;
+    /** 弹窗队列上限缺省（BE-5e 下发用；与 system_config.notice.popup_queue_max 同键） */
+    private static final int DEFAULT_POPUP_QUEUE_MAX = 5;
 
     /** 目标用户批量查询分片（避免超长 IN） */
     private static final int USER_CHUNK = 500;
@@ -101,6 +116,7 @@ public class NotifyService implements WindowChangeNotifier {
     private final SysRoleMapper roleMapper;
     private final SysUserRoleMapper userRoleMapper;
     private final UserSemesterProfileMapper profileMapper;
+    private final SemesterMapper semesterMapper;
     private final ConfigService configService;
     private final AuditService auditService;
     private final WxMaClient wxMaClient;
@@ -218,13 +234,67 @@ public class NotifyService implements WindowChangeNotifier {
         // 并发场景下两个请求可能都通过 NOT EXISTS 判断，此时由 DB 唯一约束裁决：
         // 后到者拿到 DuplicateKeyException，语义上等价于「已确认」，按成功返回（SPEC §12）。
         try {
-            noticeRecordMapper.insertConfirmIfAbsent(taskId, current.userId());
+            noticeRecordMapper.insertConfirmIfAbsent(taskId, current.userId(), task.getSemesterId(),
+                    SEND_STATUS_CONFIRMED);
         } catch (DuplicateKeyException e) {
             log.debug("并发确认已由唯一键兜底，视为成功: task={}, user={}", taskId, current.userId());
         }
         if (request != null && request.subscribeResult() != null && log.isInfoEnabled()) {
             log.info("订阅授权上报: task={}, user={}, result={}", taskId, current.userId(), request.subscribeResult());
         }
+    }
+
+    /**
+     * 「进入选书页即确认收到」（BE-5g，D6 默认补实现为独立确认类型）。
+     *
+     * <p>把当前用户**所有未确认且面向本人角色**的 active 任务按 {@code confirmed_by_entry} 补记确认；
+     * 已有确认记录则不动（幂等）。弹窗仍为主触达——已被入口确认的任务不再出现在弹窗队列（属预期）。</p>
+     *
+     * @return 本次新确认的任务数
+     */
+    @Transactional
+    public int confirmByEntry() {
+        CurrentUser current = SecurityUtils.requireCurrentUser();
+        Long semesterId = SemesterContextHolder.get();
+        if (semesterId == null) {
+            return 0;
+        }
+        int confirmed = 0;
+        for (NoticeTask task : noticeTaskMapper.selectActiveBySemester(semesterId)) {
+            if (!targetsUser(task, current)) {
+                continue;
+            }
+            if (noticeRecordMapper.selectConfirmed(task.getId(), current.userId()) != null) {
+                continue;
+            }
+            try {
+                confirmed += noticeRecordMapper.insertConfirmIfAbsent(task.getId(), current.userId(),
+                        task.getSemesterId(), SEND_STATUS_CONFIRMED_BY_ENTRY);
+            } catch (DuplicateKeyException e) {
+                log.debug("入口确认并发兜底: task={}, user={}", task.getId(), current.userId());
+            }
+        }
+        if (confirmed > 0) {
+            log.info("进入选书页确认: user={}, tasks={}", current.userId(), confirmed);
+        }
+        return confirmed;
+    }
+
+    /**
+     * 通知配置下发（BE-5e）：小程序/Web 需要的订阅模板 id 与弹窗队列上限。
+     *
+     * <p>模板 id 属部署参数（环境变量 {@code WX_SUBSCRIBE_TEMPLATE_ID}），不入配置表：
+     * {@code ConfigService.KEY_WHITELIST} 的值域是 {@code int[]}，字符串型配置放进去要改值域校验，
+     * 成本不划算。空串归一化为 null，前端据此决定是否发起订阅授权。</p>
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> subscribeConfig() {
+        String templateId = textbookProperties.getWeixin().getMiniapp().getSubscribeTemplateId();
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("subscribeTemplateId", templateId == null || templateId.isBlank() ? null : templateId);
+        data.put("popupQueueMax", configService.getInt(ConfigService.NOTICE_POPUP_QUEUE_MAX,
+                DEFAULT_POPUP_QUEUE_MAX));
+        return data;
     }
 
     /**
@@ -256,8 +326,17 @@ public class NotifyService implements WindowChangeNotifier {
     /** active 学期任务列表（按 id DESC，含 closed 历史） */
     @Transactional(readOnly = true)
     public List<NoticeTaskListItem> listTasks() {
-        Long semesterId = requireActiveSemesterId();
-        return noticeTaskMapper.selectBySemester(semesterId).stream()
+        return listTasks(null);
+    }
+
+    /**
+     * 任务列表（BE-5d）：{@code semesterId} 缺省 = 当前 active 学期（向后兼容），
+     * 显式传入时可查历史（含已归档）学期的任务。
+     */
+    @Transactional(readOnly = true)
+    public List<NoticeTaskListItem> listTasks(Long semesterId) {
+        Long target = semesterId != null ? semesterId : requireActiveSemesterId();
+        return noticeTaskMapper.selectBySemester(target).stream()
                 .map(this::toListItem)
                 .toList();
     }
@@ -436,13 +515,33 @@ public class NotifyService implements WindowChangeNotifier {
      * 连接池耗尽。现改为「事务内只读快照 + 事务外逐条发送与落库」：目标解析在一个只读事务里
      * 完成，随后每条记录独立提交，单条失败不影响其余。</p>
      */
-    public void resendTask(NoticeTask task) {
+    public ResendStats resendTask(NoticeTask task) {
+        return resendTask(task, false);
+    }
+
+    /**
+     * 单任务重发一轮（带窗口门禁与返回统计）。
+     *
+     * @param requireOpenWindow true = 调用方是显式「立即发送」入口：窗口非开放时抛 409
+     *                          WINDOW_CLOSED；false = 定时调度路径：静默跳过（记日志）
+     * @return 本轮统计；因窗口未开放 / 达轮次上限而跳过时返回 skippedReason 非空的统计
+     */
+    public ResendStats resendTask(NoticeTask task, boolean requireOpenWindow) {
+        WindowGate gate = windowGate(task);
+        if (!gate.open()) {
+            if (requireOpenWindow) {
+                throw new BizException(ErrorCode.WINDOW_CLOSED,
+                        "征订窗口未开放（" + gate.reason() + "），不发送订阅消息");
+            }
+            log.info("窗口非开放，跳过重发: task={}, reason={}", task.getId(), gate.reason());
+            return ResendStats.skipped(roundNoOf(task), gate.reason());
+        }
         int roundLimit = configService.getInt(ConfigService.NOTICE_ROUND_LIMIT, DEFAULT_ROUND_LIMIT);
         Integer maxRound = noticeRecordMapper.selectMaxRoundNo(task.getId());
         int roundNo = (maxRound == null ? 0 : maxRound) + 1;
         if (roundNo > roundLimit) {
             log.info("通知任务已达重发轮次上限，停止订阅消息重发: task={}, roundLimit={}", task.getId(), roundLimit);
-            return;
+            return ResendStats.skipped(roundNo, "已达重发轮次上限");
         }
         // 只读快照（一个短事务内取完，不跨远程调用）
         ResendTargets snapshot = loadResendTargets(task, roundNo);
@@ -460,10 +559,143 @@ public class NotifyService implements WindowChangeNotifier {
                 }
             }
             // 逐条独立事务落库：单条插入失败（含唯一键冲突）不牵连其余用户
-            insertRoundRecord(task.getId(), user.getId(), roundNo, status);
+            insertRoundRecord(task, user.getId(), roundNo, status);
         }
         log.info("通知重发一轮: task={}, round={}, 目标={}, sent={}, unauthorized={}, failed={}, 跳过={}",
                 task.getId(), roundNo, snapshot.total(), sent, unauthorized, failed, skipped);
+        return new ResendStats(roundNo, snapshot.total(), sent, unauthorized, failed, skipped, null);
+    }
+
+    private int roundNoOf(NoticeTask task) {
+        Integer maxRound = noticeRecordMapper.selectMaxRoundNo(task.getId());
+        return (maxRound == null ? 0 : maxRound) + 1;
+    }
+
+    /** 最近一轮发送时间（BE-5c 调度间隔判定；无记录返回 null）。 */
+    @Transactional(readOnly = true)
+    public LocalDateTime lastSentAt(Long taskId) {
+        return noticeRecordMapper.selectLastSentAt(taskId);
+    }
+
+    /** 一轮重发统计（BE-5b：立即发送端点回显；调度路径只记日志）。 */
+    public record ResendStats(int roundNo, int total, int sent, int unauthorized, int failed,
+                              int skipped, String skippedReason) {
+
+        static ResendStats skipped(int roundNo, String reason) {
+            return new ResendStats(roundNo, 0, 0, 0, 0, 0, reason);
+        }
+    }
+
+    /** 窗口门禁判定结果（BE-5a）。 */
+    private record WindowGate(boolean open, String reason) {
+    }
+
+    /**
+     * 任务所属学期的窗口是否开放（BE-5a：发送前必须校验）。
+     *
+     * <p>此前重发完全不看窗口：窗口截止后任务仍是 active，每天继续给未确认学生发订阅消息，
+     * 而征订早已结束——通知内容（「请尽快提交」）与实际状态矛盾，且反复打扰用户。</p>
+     */
+    private WindowGate windowGate(NoticeTask task) {
+        Semester semester = semesterMapper.selectByIdSoft(task.getSemesterId());
+        if (semester == null) {
+            return new WindowGate(false, "学期不存在");
+        }
+        boolean open = "open".equals(semester.getWindowStatus())
+                && Integer.valueOf(1).equals(semester.getChannelOpen());
+        if (open) {
+            return new WindowGate(true, null);
+        }
+        return new WindowGate(false, "window_status=" + semester.getWindowStatus()
+                + ", channel_open=" + semester.getChannelOpen());
+    }
+
+    /**
+     * 立即发送一轮（BE-5b）：管理员点「创建并发送」后不必等下一个调度周期。
+     *
+     * <p>同步执行一轮（逐条独立事务、2000 人内数十秒量级）；任务已关闭 → 409；
+     * 窗口非开放 → 409 WINDOW_CLOSED。</p>
+     */
+    public ResendStats sendNow(Long taskId) {
+        NoticeTask task = requireTask(taskId);
+        if (!STATUS_ACTIVE.equals(task.getStatus())) {
+            throw new BizException(ErrorCode.STATE_CONFLICT, "通知任务已关闭");
+        }
+        return resendTask(task, true);
+    }
+
+    /**
+     * 窗口关闭时自动关闭该学期的 active 通知任务（BE-5a）。
+     *
+     * <p>由 {@code SemesterService} 在提前截止 / 自动到点截止时调用（同事务）。语义：
+     * 征订结束即不再要求确认，任务置 closed 后同学期可再建新任务（延长场景由
+     * {@code onWindowChange} 自动新建）。此前关闭窗口只往任务里追加「请尽快提交」文案，
+     * 任务永远 active、每天继续重发。</p>
+     */
+    @Override
+    @Transactional
+    public void onWindowClosed(Long semesterId, String reason) {
+        List<NoticeTask> activeTasks = noticeTaskMapper.selectActiveBySemester(semesterId);
+        if (activeTasks.isEmpty()) {
+            return;
+        }
+        int closed = 0;
+        for (NoticeTask task : activeTasks) {
+            NoticeTask update = new NoticeTask();
+            update.setId(task.getId());
+            update.setStatus(STATUS_CLOSED);
+            // 系统关闭：closed_by 留空（NULL 表示非人工关闭），closed_at 记录时间
+            update.setClosedAt(AppTime.now());
+            int rows = noticeTaskMapper.update(update, Wrappers.<NoticeTask>lambdaUpdate()
+                    .eq(NoticeTask::getId, task.getId())
+                    .eq(NoticeTask::getStatus, STATUS_ACTIVE));
+            closed += rows;
+        }
+        auditService.record(AuditService.NOTICE, "notice_task", String.valueOf(semesterId),
+                Map.of("op", "auto-close", "reason", reason == null ? "window_closed" : reason,
+                        "closedTasks", String.valueOf(closed)));
+        log.info("窗口关闭，通知任务自动关闭: semester={}, tasks={}, reason={}", semesterId, closed, reason);
+    }
+
+    /**
+     * 学期归档时把该学期的通知记录迁入历史表（BE-5d）。
+     *
+     * <p>分批 5000 行：INSERT ... SELECT → DELETE 已迁行，循环至主表无该学期记录。
+     * 独立事务（REQUIRES_NEW）——**不在学期归档主事务内**：归档只做学期状态切换，
+     * 数据迁移失败不影响归档结果，且可重跑（幂等靠 {@code uk_history_record}）。</p>
+     *
+     * @return 迁移行数
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long archiveSemesterRecords(Long semesterId) {
+        if (semesterId == null) {
+            return 0L;
+        }
+        long total = 0;
+        int guard = 0;
+        while (guard++ < ARCHIVE_MAX_ROUNDS) {
+            long remaining = noticeRecordMapper.countBySemester(semesterId);
+            if (remaining == 0) {
+                break;
+            }
+            noticeRecordMapper.insertHistoryBatch(semesterId, ARCHIVE_BATCH);
+            int deleted = noticeRecordMapper.deleteArchivedFromMain(semesterId);
+            total += deleted;
+            if (deleted == 0) {
+                // 历史表已有这些行（重跑场景）：主表记录仍在但历史表已存在 → 直接删主表
+                log.warn("归档批次未删除任何行（可能历史表已有同 record_id）: semester={}, remaining={}",
+                        semesterId, remaining);
+                break;
+            }
+        }
+        long historyRows = noticeRecordMapper.countHistoryBySemester(semesterId);
+        auditService.record(AuditService.NOTICE, "notice_task", String.valueOf(semesterId),
+                Map.of("op", "archive-records", "rows", String.valueOf(total),
+                        "historyRows", String.valueOf(historyRows)));
+        log.info("通知记录归档完成: semester={}, 迁移={} 行, 历史表累计={} 行",
+                semesterId, total, historyRows);
+        return total;
     }
 
     /** 一轮重发的只读快照：待发送用户 + 已跳过计数 + 目标总数。 */
@@ -513,18 +745,21 @@ public class NotifyService implements WindowChangeNotifier {
         return ok ? "sent" : "failed";
     }
 
-    private void insertRoundRecord(Long taskId, Long userId, int roundNo, String status) {
+    private void insertRoundRecord(NoticeTask task, Long userId, int roundNo, String status) {
         try {
             NoticeRecord record = new NoticeRecord();
-            record.setTaskId(taskId);
+            record.setTaskId(task.getId());
             record.setUserId(userId);
+            // BE-5d：写入学期归属，供学期归档时按学期迁移
+            record.setSemesterId(task.getSemesterId());
             record.setRoundNo(roundNo);
             record.setSentAt(AppTime.now());
             record.setSendStatus(status);
             record.setDeleted(0L);
             noticeRecordMapper.insert(record);
         } catch (DuplicateKeyException e) {
-            log.warn("通知发送记录重复（唯一键兜底）: task={}, user={}, round={}", taskId, userId, roundNo);
+            log.warn("通知发送记录重复（唯一键兜底）: task={}, user={}, round={}",
+                    task.getId(), userId, roundNo);
         }
     }
 

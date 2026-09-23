@@ -9,6 +9,7 @@
         <id property="id" column="id"/>
         <result property="semesterId" column="semester_id"/>
         <result property="type" column="type"/>
+        <result property="changeType" column="change_type"/>
         <result property="targetUserId" column="target_user_id"/>
         <result property="targetUserName" column="targetUserName"/>
         <result property="targetUserNo" column="targetUserNo"/>
@@ -26,7 +27,7 @@
     </resultMap>
 
     <select id="selectPageByFilter" resultMap="changeRequestListItemMap">
-        SELECT r.id, r.semester_id, r.type, r.target_user_id, r.payload_json, r.status,
+        SELECT r.id, r.semester_id, r.type, r.change_type, r.target_user_id, r.payload_json, r.status,
                r.batch_no, r.applicant_id, r.reason, r.created_at, r.review_at,
                t.name AS targetUserName, t.user_no AS targetUserNo,
                tc.name AS currentCollegeName, tcl.name AS currentClassName,
@@ -41,6 +42,7 @@
         <if test="status != null and status != ''"> AND r.status = #{status}</if>
         <if test="batchNo != null and batchNo != ''"> AND r.batch_no = #{batchNo}</if>
         <if test="type != null and type != ''"> AND r.type = #{type}</if>
+        <if test="changeType != null and changeType != ''"> AND r.change_type = #{changeType}</if>
         ORDER BY r.id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
@@ -52,5 +54,6 @@
         <if test="status != null and status != ''"> AND r.status = #{status}</if>
         <if test="batchNo != null and batchNo != ''"> AND r.batch_no = #{batchNo}</if>
         <if test="type != null and type != ''"> AND r.type = #{type}</if>
+        <if test="changeType != null and changeType != ''"> AND r.change_type = #{changeType}</if>
     </select>
 </mapper>

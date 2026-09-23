@@ -21,5 +21,10 @@ public record ChangeSubmitRequest(
         /** 目标学院 id */
         @NotNull(message = "目标学院不能为空") Long targetCollegeId,
         /** 目标班级 id（仅 student 需要；teacher 传了即 400） */
-        Long targetClassId) {
+        Long targetClassId,
+        /**
+         * 异动类型（BE-7a，D7 默认必填）：MAJOR_TRANSFER/GRADE_REPEAT/UPGRADE/OTHER，兼容中文。
+         * 缺省归一为 OTHER（兼容尚未升级的旧客户端，不阻断历史调用）。
+         */
+        String changeType) {
 }
