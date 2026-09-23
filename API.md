@@ -344,7 +344,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
 | GET | `/api/admin/role` | `role:manage` | 角色列表：`[{id, roleCode, roleName, sort, builtIn, userCount, permCodes[]}]`（ADMIN 的 `permCodes` 返回全部 39 条 = 短路后的实际权限） |
-| POST | `/api/admin/role` | `role:manage` | 新建角色：`{roleCode, roleName, sort?}`；编码规则 `^[A-Z][A-Z0-9_]{1,31}$`，重复 → 400「角色编码已存在」；自定义角色默认无权限 |
+| POST | `/api/admin/role` | `role:manage` | 新建角色：`{roleCode, roleName, sort?}`；编码规则 `^[A-Z][A-Z0-9_]{1,31}$`，重复 → 400「角色编码已存在」；自定义角色默认无权限。**响应为 `data` = 新角色 id（裸数字，OpenAPI `ApiResponseLong`），不是角色对象** |
 | PUT | `/api/admin/role/{id}` | `role:manage` | 编辑名称/排序（**编码不可改**） |
 | DELETE | `/api/admin/role/{id}` | `role:manage` | 逻辑删除 + 级联清授权；内置角色 → 400「内置角色不可删除」；仍有账号绑定 → 409「该角色仍有 N 个账号，请先调整账号角色」 |
 | PUT | `/api/admin/role/{id}/permissions` | `role:permission:assign` | 角色-权限**全量覆盖**：`{permCodes:[...]}`（空数组 = 收回全部）；未知权限码 → 400；**ADMIN 角色 → 400「超管权限由系统内置，不可修改」** |
