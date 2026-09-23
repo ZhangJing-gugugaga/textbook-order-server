@@ -394,5 +394,44 @@ print('渠道' if any(h == '渠道' for h in header) else 'MISSING:' + str(heade
 eq "⑦ 导出文件含「渠道」列" "渠道" "$(cat "$WORK/notice-head.txt" | tr -d '\r')"
 
 # ============================================================================
+# 文档-实现一致性门禁（docs/13-后端文档对齐-goal-prompt-20260923.md §5）
+# 校验四项：API.md 端点集合 / SPEC §11 端点集合 / API.md 标题计数 / 错误码与枚举覆盖
+# ============================================================================
+head2 "文档-实现一致性（scripts/check-api-md.mjs）"
+
+NODE_BIN=""
+if command -v node >/dev/null 2>&1; then NODE_BIN="$(command -v node)"
+elif [ -x "/c/Program Files/nodejs/node.exe" ]; then NODE_BIN="/c/Program Files/nodejs/node.exe"
+fi
+if [ -z "$NODE_BIN" ]; then
+  printf '  [33mSKIP[0m 未找到 node，跳过文档一致性校验（请在装有 node 的机器上执行）
+'
+else
+  if "$NODE_BIN" scripts/check-api-md.mjs -v > "$WORK/doc-consistency.txt" 2>&1; then
+    ok "① check-api-md.mjs 全部一致"
+  else
+    bad "① check-api-md.mjs 发现不一致（见 $WORK/doc-consistency.txt）"
+  fi
+  eq "② API.md 端点集合与代码一致（111 个）" "1"     "$(grep -c 'API.md 端点集合与代码一致' "$WORK/doc-consistency.txt" | tr -d '
+')"
+  eq "③ SPEC.md §11 端点集合与代码一致（111 个）" "1"     "$(grep -c 'SPEC.md §11 端点集合与代码一致' "$WORK/doc-consistency.txt" | tr -d '
+')"
+  eq "④ API.md §1.6 覆盖全部 ErrorCode 常量" "1"     "$(grep -c 'API.md §1.6 覆盖全部' "$WORK/doc-consistency.txt" | tr -d '
+')"
+  eq "⑤ API.md §1.7 发送状态枚举覆盖全部取值" "1"     "$(grep -c 'API.md §1.7 发送状态枚举覆盖全部取值' "$WORK/doc-consistency.txt" | tr -d '
+')"
+  eq "⑥ 标题计数不一致项为 0" "0"     "$(grep -c '标题计数不符' "$WORK/doc-consistency.txt" | tr -d '
+')"
+fi
+
+# 旧数字清零（goal prompt §5 第 4 条）：按「旧结论短语」精确匹配，避免误伤时间格式示例
+STALE=0
+for pat in '37 条清单随契约冻结' '37 条权限码' '37 条 M1 冻结' '95 端点' '每日 09:30' '0 30 9 * * ?' '超管关闭补正' '账号信息已变更'; do
+  n="$(grep -rn -- "$pat" PRD.md SPEC.md API.md docs/*.md 2>/dev/null         | grep -v 'goal-prompt' | grep -v '不存在' | grep -v '已清零' | wc -l | tr -d ' ')"
+  [ "$n" = "0" ] || { STALE=$((STALE+n)); printf '      [33m残留「%s」× %s[0m
+' "$pat" "$n"; }
+done
+eq "⑦ 过期数字/表述零命中（37 条 / 95 端点 / 09:30 / 超管关闭补正）" "0" "$STALE"
+
 printf '\n\033[1m结果：PASS=%d  FAIL=%d\033[0m（库 %s 保留供排查，应用日志 %s）\n' "$PASS" "$FAIL" "$DB" "$APP_LOG"
 [ "$FAIL" -eq 0 ] || exit 1

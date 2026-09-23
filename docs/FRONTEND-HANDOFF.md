@@ -1,10 +1,10 @@
 # 前端联调交接（2026-09-22）
 
-> 本轮后端做了两轮安全/一致性修复，**端点数量与路径没有变化**（95 个端点，与 [API.md](../API.md) 完全一致），
+> 本文写于 2026-09-22 的两轮安全/一致性修复之后；此后 BE-1~BE-8 又新增 14 个端点，**端点总数为 111**（与 [API.md](../API.md) 逐条一致，`node scripts/check-api-md.mjs` 自动校验），新增端点见下方「D. BE-1~BE-8 变更」一节。
 > 但有若干**契约行为变更**，前端不改会在联调中出问题。下面 A 节是必须处理的，B 节是建议接入的，
 > C 节是环境信息，D 节是已知限制。
 >
-> 完整字段级契约见 [API.md](../API.md)（92+ 端点手册）；本文只列**变化点与联调要点**。
+> 完整字段级契约见 [API.md](../API.md)（111 端点手册）；本文只列**变化点与联调要点**。
 
 ---
 
@@ -252,6 +252,21 @@ POST /api/admin/export/orders  (或 /students、/notice、/secretary/export/sign
   ```
   TEXTBOOK_CORS_ORIGINS=http://localhost:5173
   ```
+
+- **跑前端真实后端 E2E 时必须把 preview origin 也加进白名单**（前端 `playwright.config.ts`
+  的 webServer 用 `vite preview`，端口 4173）：
+
+  ```
+  TEXTBOOK_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:4173
+  ```
+
+  只配 `localhost:5173` 时，`E2E_REAL_BACKEND=1 npm run test:e2e` 会**全部登录失败**
+  （浏览器侧请求被 CORS 拦下），表现为「后端没起」的假象。
+
+- **跑 E2E / 契约测试前先确认端口无残留进程**：`4173`（preview）、`5173`（dev）、
+  `5199`、`8081`（生产反代/桩服务）。已踩过的坑：
+  ① 残留的 preview 会被 Playwright 复用并**跳过 build**，测到旧产物；
+  ② 8081 上的桩服务会对任意路径返回 200，造成**假绿**。
 
 ### 联调期必调的两项（否则走查必然撞限流）
 

@@ -1,9 +1,11 @@
 # 教材征订系统 · 服务端技术规格（SPEC · textbook-order-server）
 
-> 版本 V1.0.0 · 2026-09-21 · 依据：本仓库 `PRD.md`（V1.1.0）、`03-后端开发计划与决策.md`（v3 复审修订版）、`docs/01`（需求决策）、`docs/05`（复审 16 问）、`docs/06`（W1-W24 追问回执）
+> 版本 V1.0.1 · 2026-09-23 · 依据：本仓库 `PRD.md`（V1.2.0）、`03-后端开发计划与决策.md`（v3 复审修订版）、`docs/01`（需求决策）、`docs/05`（复审 16 问）、`docs/06`（W1-W24 追问回执）
 > 定位：PRD 说「做什么/为什么」，本文说「**怎么实现**」——DDL、接口清单、鉴权/隔离/双缓冲/通知的实现方式、事务边界、配置项、测试与部署。里程碑、分工与验收标准见 03 号文档 §12。
-> 冲突优先级：本文与 03 v3 冲突时以 03 v3 为准；与 PRD V1.1.0 冲突时以 PRD 为准并回改本文。
-> 约定：接口路径为**契约基线**，M1 末由 springdoc-openapi 生成 OpenAPI 3 冻结（03 §14）；冻结后变更走「变更记录 + 双方确认」。
+> **权威性声明（重要）**：系统已上线并冻结契约，**唯一契约源是 `API.md` V1.1.x + `GET /v3/api-docs`**；本文为**设计说明文档**（记录当初的设计意图与取舍），实现细节（枚举取值、状态机、调度节奏、配置键、端点清单）**以代码与 `API.md` 为准**。本文与实现冲突时，按「以代码改文档」处理并更新本文；`PRD.md` 为需求文档（V1.2.0），冲突时同样以 `API.md` + 代码为准。
+> 冲突优先级：本文与 03 v3 冲突时以 03 v3 为准；与 `PRD.md` 冲突时以 PRD 为准并回改本文。
+> 约定：接口路径为**契约基线**，M1 末由 springdoc-openapi 生成 OpenAPI 3 冻结（03 §14）；冻结后变更走「变更记录 + 双方确认」（变更记录见 `API.md` §6）。
+> **一致性门禁**：`node scripts/check-api-md.mjs` 校验「§11 端点集合 == 代码实际端点（method + path）」「`API.md` 标题计数 == 表格行数」「错误码/枚举表覆盖代码常量」，已纳入 `scripts/verify-be-2026-09-23.sh`。
 
 ---
 
@@ -32,7 +34,7 @@ textbook-order-server/
 ├─ src/main/resources/
 │  ├─ application.yml / application-local.yml / application-trial.yml / application-school.yml
 │  ├─ db/schema.sql                                  # §3 DDL（初始化脚本）
-│  ├─ db/data-permission.sql                         # sys_permission 权限码种子（37 条）
+│  ├─ db/data-permission.sql                         # sys_permission 权限码种子（39 条：M1 冻结 37 + BE-2 新增 2，role:manage/role:permission:assign）
 │  ├─ db/data-seed.sql                               # 种子数据（M1 交付物）
 │  └─ templates/                                     # 5 张 Excel 导入模板 + 签字版导出模板
 └─ src/main/java/com/tian/textbook/
@@ -122,7 +124,7 @@ CREATE TABLE sys_permission (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   created_by BIGINT DEFAULT NULL, updated_by BIGINT DEFAULT NULL, deleted BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (id), UNIQUE KEY uk_perm_code (perm_code, deleted)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='权限码（37 条种子见 db/data-permission.sql）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='权限码（39 条种子见 db/data-permission.sql）';
 
 CREATE TABLE sys_user_role (
   id BIGINT NOT NULL AUTO_INCREMENT, user_id BIGINT NOT NULL, role_id BIGINT NOT NULL,
@@ -232,7 +234,7 @@ CREATE TABLE teacher_course (
 CREATE TABLE order_form (
   id BIGINT NOT NULL AUTO_INCREMENT, semester_id BIGINT NOT NULL, teacher_id BIGINT NOT NULL,
   status VARCHAR(24) NOT NULL DEFAULT 'draft'
-    COMMENT 'draft/submitted/rejected_auto/rejected/pending_review/reviewed',
+    COMMENT 'draft/pending_review/reviewed（终态）/rejected/rejected_auto；submitted 为历史死值（BE-8）',
   field_check_result JSON DEFAULT NULL COMMENT '[{field,rule,message}]（契约冻结项）',
   review_by BIGINT DEFAULT NULL, review_at DATETIME DEFAULT NULL, review_note VARCHAR(200) DEFAULT NULL,
   submitted_at DATETIME DEFAULT NULL, correct_deadline DATETIME DEFAULT NULL COMMENT '补正截止（关窗后 7 天，W4）',
@@ -279,7 +281,7 @@ CREATE TABLE change_request (
   type VARCHAR(16) NOT NULL COMMENT 'student/teacher', target_user_id BIGINT NOT NULL,
   payload_json JSON NOT NULL COMMENT '变更前后值；批量时逐行一条',
   status VARCHAR(24) NOT NULL DEFAULT 'pending_field_check'
-    COMMENT 'pending_field_check/pending_review/approved/rejected',
+    COMMENT 'pending_review/approved/rejected；pending_field_check 为历史值（字段审查已改为提交时同步完成，BE-7d）',
   field_check_result JSON DEFAULT NULL,
   batch_no VARCHAR(40) DEFAULT NULL COMMENT '批量导入批次号（Q10）',
   applicant_id BIGINT NOT NULL, reviewer_id BIGINT DEFAULT NULL, review_at DATETIME DEFAULT NULL,
@@ -340,7 +342,7 @@ CREATE TABLE notice_record (
   id BIGINT NOT NULL AUTO_INCREMENT, task_id BIGINT NOT NULL, user_id BIGINT NOT NULL COMMENT '主体=用户（含教师/秘书，W7）',
   round_no INT DEFAULT NULL COMMENT '第几轮（确认记录为空）',
   sent_at DATETIME DEFAULT NULL,
-  send_status VARCHAR(16) DEFAULT NULL COMMENT 'sent/unauthorized/failed',
+  send_status VARCHAR(24) DEFAULT NULL COMMENT 'sent/unauthorized/failed/confirmed/confirmed_by_entry',
   confirmed_at DATETIME DEFAULT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -373,7 +375,12 @@ CREATE TABLE audit_log (
 ```
 Spring Security 过滤器链：
   JwtAuthFilter（解析 access → 校验签名/过期 → 比对 role_version 与用户状态 → 写 SecurityContext）
-  → MustChangePasswordFilter（must_change_password=1 或 first_login_verified=0 时，仅放行 /api/auth/**、/api/me*）
+  → MustChangePasswordFilter（must_change_password=1 或 first_login_verified=0 时，**仅放行显式枚举的 4 个路径**：
+      POST /api/auth/login、POST /api/auth/refresh、POST /api/auth/first-login/verify、POST /api/auth/logout，
+      外加前缀 /api/me（含改密 PUT /api/me/password）；其余业务接口一律 403 FIRST_LOGIN_REQUIRED）
+      ⚠ **不得写成 /api/auth/** 通配**：该前缀会连带放行 POST /api/auth/switch-role（重新签发 access/refresh），
+        等于让未完成首登校验的会话换到一份新的长效令牌（实现见 MustChangePasswordFilter.ALLOWED_PATHS，
+        契约表述见 API.md §1.4；单测见 FirstLoginSecurityIntegrationTest）
   → @PreAuthorize("hasAuthority('order:form:review')") 方法级权限码校验
 ```
 
@@ -461,7 +468,7 @@ STUDENT   → user_id = #{currentUserId}
 | `ISBN_FORMAT` | ISBN-10/13 校验位 | 「第 N 行：ISBN 格式不正确」 |
 
 - 输出结构（契约冻结项）：`field_check_result = [{"field":"items[2].quantity","rule":"QTY_RANGE","message":"..."}]`；任一不过 → `rejected_auto`，**逐字段**返回，教师可修复后窗口内无限次重提。
-- 内容审核：`POST /api/admin/order-forms/{id}/review`，`action ∈ {pass, reject}`；`reject` 时 `review_note` 必填 1-200 字；驳回写 `correct_deadline = min(关窗时间+order.correct_window_days, 超管关闭补正时刻)`。
+- 内容审核：`POST /api/admin/order-forms/{id}/review`，`action ∈ {pass, reject}`；`reject` 时 `review_note` 必填 1-200 字；驳回写 `correct_deadline = 窗口截止（semester.window_end，缺失则以当前时间为基准）+ order.correct_window_days`（默认 7 天，`TeacherOrderService#correctionDeadline`）。**不存在「超管关闭补正」这个概念**，也没有对应的时刻参与计算。
 - 异动审批同引擎（规则集不同）：`TARGET_EXISTS` / `COLLEGE_EXISTS` / `CLASS_EXISTS`（仅 student）/ `TYPE_VALID` / `VALUE_CHANGED`；批量按行执行，`batch_no` 关联。
 
 ## 9. 通知实现（W5/W7/W8/W18）
@@ -471,9 +478,9 @@ STUDENT   → user_id = #{currentUserId}
 | 任务来源 | ① 手动（超管，同学期仅 1 个 active，重复创建返回 409 或提示合并）② 窗口变更自动（**合并进 active 任务**：追加内容 + 重置轮次计数） |
 | 确认 | `GET /api/notice/unconfirmed` 返回未确认任务（含已停止重发但未确认的任务，Q7）；`POST /api/notice/{taskId}/confirm` 幂等（`notice_record` 首次写 `confirmed_at`），返回 204 |
 | 订阅授权上报 | confirm 请求体可带 `subscribe_result`（accepted/rejected）；accepted 时 `sys_user.openid` 存在即可进入可发送名单 |
-| 重发调度 | `@Scheduled(cron = "0 30 9 * * ?")`（每日 09:30，Asia/Shanghai）：扫 active 任务 → 未确认且**已授权**用户 → 订阅消息发送（仅 STUDENT） |
-| 轮次与间隔 | 以 `system_config.notice.round_limit / notice.interval_hours` 为唯一真源，改动立即对未完结任务生效（W8）；`notice_task` 两字段仅展示 |
-| 落库 | 每次尝试写 `notice_record(round_no, sent_at, send_status)`；`send_status ∈ {sent, unauthorized, failed}`，如实记录（不做假「已送达」） |
+| 重发调度 | `@Scheduled(cron = "0 5 * * * ?")`（**每小时第 5 分钟**，Asia/Shanghai）：扫 active 任务 → 距最近一轮 ≥ `notice.interval_hours`（无发送记录的新任务立即发首轮）→ 未确认且**已授权**用户 → 订阅消息发送（仅 STUDENT） |
+| 轮次与间隔 | 以 `system_config.notice.round_limit / notice.interval_hours` 为唯一真源，**两者均为实时判定**（改动对未完结任务生效：轮次立即生效，间隔最迟下一小时生效）；`notice_task` 两字段仅作创建时快照展示与追溯，不参与判定 |
+| 落库 | 每次尝试写 `notice_record(round_no, sent_at, send_status)`；`send_status ∈ {sent, unauthorized, failed, confirmed, confirmed_by_entry}`（后两者为确认记录，`confirm-by-entry` 入口确认走 `confirmed_by_entry`），如实记录（不做假「已送达」） |
 | 停止条件 | 达 `round_limit` → 停止**订阅消息**重发；**弹窗通道不设轮次上限**，直到用户确认或超管关闭任务 |
 | 触达结论 | 一次性订阅「一次授权一条」→ 未确认者≈未授权者，重发对其基本无效（R10）；未授权名单进汇总导出的线下兜底列 |
 | 汇总导出 | 学号/工号、姓名、角色、学院、班级、渠道、各轮发送时间、发送状态、确认状态、确认时间 |
@@ -507,113 +514,149 @@ STUDENT   → user_id = #{currentUserId}
 
 **签字版模板**：`templates/secretary-signature.xlsx`（标准表格 + 签字栏三行占位：学院盖章 / 教材室签字 / 日期）；田老师样张到位后替换模板，**代码不改**。
 
-## 11. 接口清单（契约基线 · M1 冻结）
+## 11. 接口清单（契约基线 · 已与 `API.md` 逐条对齐）
 
 > 权限码列留空表示仅需登录（或为公开接口）。统一包络 `{code, message, data}`；分页 `page`/`size`（默认 1/20，上限 200）。
+>
+> **本节共 111 个端点，与 `API.md` §3 及 Controller 源码逐条一致**（`node scripts/check-api-md.mjs` 按 method + path 自动比对，纳入 `verify-be` 门禁）。端点形状、字段、错误码以 `API.md` 与 `GET /v3/api-docs` 为准。
+>
+> ⚠ 本表**一行一个端点**（不再使用 `GET/POST/PUT /api/x[/{id}]` 这类简写），以保证脚本可比对。端点总数从契约基线冻结时的 92 增至 111：V1.0.1–3 联调补 3 个最小权限只读端点，V1.0.7 补导入预览与撤销归档，V1.1.0（BE-1~BE-8）补 14 个（含角色管理 6 个）。
 
-### 11.1 认证与会话
+### 11.1 认证与会话（8）
 
 | 方法 | 路径 | 权限码 | 说明 |
 |------|------|--------|------|
 | POST | `/api/auth/login` | 公开 | 登录 → access + refresh + mustChangePassword + roles |
 | POST | `/api/auth/refresh` | 凭 refresh | 轮换 refresh，返回新 access + 新 refresh |
 | POST | `/api/auth/logout` | 登录 | 撤销本人全部 refresh |
-| POST | `/api/auth/first-login/verify` | 待改密 | 首登校验（手机号后 4 位 / openid 绑定） |
-| POST | `/api/auth/switch-role` | 登录 | 切换身份（返回新权限码集合，数据范围不变） |
-| GET | `/api/me` | 登录 | 用户信息 + 角色列表 + 当前身份 + 授权状态 |
+| POST | `/api/auth/first-login/verify` | 待改密 | 首登校验（手机号后 4 位 / 校验已绑定 openid） |
+| POST | `/api/auth/switch-role` | 登录 | 切换身份（返回新权限码集合，数据范围不变）；**首登待完成时不在放行清单** |
+| GET | `/api/me` | 登录 | 用户信息 + 角色列表 + 当前身份 + 授权状态 + active 学期归属 |
 | GET | `/api/me/permissions` | 登录 | 权限码列表（前端动态路由/菜单/`v-perm` 数据源） |
 | PUT | `/api/me/password` | 登录 | 改密（改密后撤销全部 refresh 并重发） |
 
-### 11.2 窗口与学期
+### 11.2 窗口与学期（13）
 
 | 方法 | 路径 | 权限码 | 说明 |
 |------|------|--------|------|
-| GET | `/api/semester/window/status` | `semester:window:view` | `{semesterId, windowStatus, windowStart, windowEnd, channelOpen, serverTime}` |
+| GET | `/api/semester/window/status` | `semester:window:view` | `{semesterId, semesterName, windowStatus, windowStart, windowEnd, channelOpen, serverTime, activeStatus}` |
 | GET | `/api/admin/semester` | `semester:semester:manage` | 学期列表（draft/active/archived） |
+| GET | `/api/admin/semester/{id}` | `semester:semester:manage` | 学期详情（含 `version`，供乐观锁回传） |
 | POST | `/api/admin/semester` | `semester:semester:manage` | 新建学期（draft） |
-| PUT | `/api/admin/semester/{id}` | `semester:semester:manage` | 编辑基本信息 |
-| POST | `/api/admin/semester/{id}/activate` | `semester:semester:activate` | **双缓冲原子切换**（body 带 version） |
-| POST | `/api/admin/semester/{id}/archive` | `semester:semester:activate` | 归档 |
+| PUT | `/api/admin/semester/{id}` | `semester:semester:manage` | 编辑基本信息（只写请求字段） |
+| POST | `/api/admin/semester/{id}/activate` | `semester:semester:activate` | **双缓冲原子切换**（body 带 version；不可逆） |
+| POST | `/api/admin/semester/{id}/archive` | `semester:semester:activate` | 归档（二次门禁：version 必填 + 窗口进行中须 confirmWindowOpen） |
+| POST | `/api/admin/semester/{id}/unarchive` | `semester:semester:activate` | 撤销归档（受限回滚：仅当前无 active 学期时可用） |
 | PUT | `/api/admin/semester/{id}/window` | `semester:window:manage` | 设置起止 + auto 开关 |
 | POST | `/api/admin/semester/{id}/window/open` | `semester:window:manage` | 手动开启 |
 | POST | `/api/admin/semester/{id}/window/close` | `semester:window:manage` | 提前截止 |
 | POST | `/api/admin/semester/{id}/window/extend` | `semester:window:manage` | 延长（无限次） |
 | GET | `/api/admin/semester/{id}/window/changes` | `semester:window:manage` | 变更记录（谁/何时/原值→新值） |
 
-### 11.3 组织、教材、课程、账号
+### 11.3 组织、教材、课程、账号、角色与批次（39）
 
 | 方法 | 路径 | 权限码 | 说明 |
 |------|------|--------|------|
-| GET/POST/PUT | `/api/admin/college[/{id}]` | `org:college:manage` | 学院维护 |
-| GET/POST/PUT | `/api/admin/major[/{id}]` | `org:major:manage` | 专业维护 |
-| GET/POST/PUT | `/api/admin/class[/{id}]` | `org:class:manage` | 班级维护（含 student_count） |
+| GET | `/api/admin/college` | `org:college:manage` | 学院列表 |
+| POST | `/api/admin/college` | `org:college:manage` | 新增学院 |
+| PUT | `/api/admin/college/{id}` | `org:college:manage` | 编辑学院 |
+| GET | `/api/admin/major` | `org:major:manage` | 专业列表（`?collegeId=`） |
+| POST | `/api/admin/major` | `org:major:manage` | 新增专业 |
+| PUT | `/api/admin/major/{id}` | `org:major:manage` | 编辑专业 |
+| GET | `/api/admin/class` | `org:class:manage` | 班级列表（含 student_count） |
+| POST | `/api/admin/class` | `org:class:manage` | 新增班级 |
+| PUT | `/api/admin/class/{id}` | `org:class:manage` | 编辑班级（含手工修正 studentCount） |
 | GET | `/api/admin/textbook` | `textbook:book:manage` | 教材分页检索 |
-| POST/PUT | `/api/admin/textbook[/{id}]` | `textbook:book:manage` | 新增/编辑 |
+| POST | `/api/admin/textbook` | `textbook:book:manage` | 新增教材 |
+| PUT | `/api/admin/textbook/{id}` | `textbook:book:manage` | 编辑教材 |
 | POST | `/api/admin/textbook/{id}/status` | `textbook:book:manage` | 停用/启用 |
 | POST | `/api/admin/textbook/import` | `textbook:book:import` | 教材导入（返回 batchId） |
 | GET | `/api/admin/textbook/template` | `textbook:book:import` | 模板下载 |
-| GET/POST/PUT | `/api/admin/course[/{id}]` | `course:course:manage` | 课程维护 |
-| GET/POST/DELETE | `/api/admin/teacher-course[/{id}]` | `course:teacher:manage` | 任课关系 |
-| POST | `/api/admin/teacher-course/import` | `course:teacher:manage` | 任课导入 |
+| GET | `/api/admin/course` | `course:course:manage` | 课程列表（`?semesterId=`） |
+| POST | `/api/admin/course` | `course:course:manage` | 新增课程 |
+| PUT | `/api/admin/course/{id}` | `course:course:manage` | 编辑课程 |
+| GET | `/api/admin/teacher-course` | `course:teacher:manage` | 任课关系列表 |
+| POST | `/api/admin/teacher-course` | `course:teacher:manage` | 新增任课关系 |
+| DELETE | `/api/admin/teacher-course/{id}` | `course:teacher:manage` | 删除任课关系（逻辑删除） |
+| POST | `/api/admin/teacher-course/import` | `course:teacher:manage` | 任课导入（返回 batchId） |
 | GET | `/api/admin/teacher-course/template` | `course:teacher:manage` | 模板下载 |
-| GET | `/api/admin/user` | `user:account:manage` | 账号检索（角色/学院/状态） |
+| GET | `/api/admin/user` | `user:account:manage` | 账号检索（角色/学院/状态/关键字） |
 | POST | `/api/admin/user` | `user:account:manage` | 建号（含供货商） |
 | PUT | `/api/admin/user/{id}/status` | `user:account:manage` | 停用/启用（即时踢下线） |
-| PUT | `/api/admin/user/{id}/reset-password` | `user:account:reset` | 重置密码 |
-| POST | `/api/admin/user/import` | `people:student:import` / `people:teacher:import` | 名单导入（biz_type 区分） |
+| PUT | `/api/admin/user/{id}/reset-password` | `user:account:reset` | 重置密码（清首登标记） |
+| PUT | `/api/admin/user/{id}/roles` | `user:account:manage` | 账号角色全量覆盖（BE-2；`role_version+1` + 撤销 refresh） |
+| POST | `/api/admin/user/import` | `people:student:import` / `people:teacher:import` | 名单导入（biz_type 区分；含局部名单门禁） |
+| POST | `/api/admin/user/import/preview` | 同上 | 导入预览（只读，不落库不建批次） |
 | GET | `/api/admin/user/import/template` | 同上 | 模板下载 |
-| GET | `/api/batch/{batchId}` | `import:batch:view` | 批次进度 |
+| GET | `/api/admin/role` | `role:manage` | 角色列表（BE-2） |
+| POST | `/api/admin/role` | `role:manage` | 新建角色（响应 `data` = 新角色 id） |
+| PUT | `/api/admin/role/{id}` | `role:manage` | 编辑名称/排序（编码不可改） |
+| DELETE | `/api/admin/role/{id}` | `role:manage` | 逻辑删除 + 级联清授权 |
+| PUT | `/api/admin/role/{id}/permissions` | `role:permission:assign` | 角色-权限全量覆盖 |
+| GET | `/api/admin/permission` | `role:manage` | 权限目录（按模块分组，共 39 条） |
+| GET | `/api/batch/{batchId}` | `import:batch:view` | 批次进度（非 ADMIN 仅本人批次） |
 | GET | `/api/batch/{batchId}/errors` | `import:batch:view` | 错误明细下载 |
 
-### 11.4 教师征订、学生选购、异动
+### 11.4 教师征订、学生选购、异动（26）
 
 | 方法 | 路径 | 权限码 | 说明 |
 |------|------|--------|------|
 | GET | `/api/teacher/my-courses` | `order:form:submit` | 本学期任课关系（按班级分组） |
-| GET | `/api/teacher/order-form` | `order:form:submit` | 当前学期征订单 |
+| GET | `/api/teacher/textbook` | `order:form:submit` | 填报选书器（在库教材检索，裸数组、封顶 50 条） |
+| GET | `/api/teacher/order-form` | `order:form:submit` | 当前学期征订单（无单时 `data=null`） |
 | POST | `/api/teacher/order-form/submit` | `order:form:submit` | 提交/补正（返回字段审查结果） |
+| POST | `/api/teacher/order-form/withdraw` | `order:form:submit` | 主动撤回（BE-4：`pending_review → draft`） |
 | GET | `/api/teacher/order-forms` | `order:form:view:self` | 历史提交记录 |
+| GET | `/api/teacher/order-forms/{id}` | `order:form:view:self` | 本人表单详情（BE-3） |
 | GET | `/api/secretary/order-forms` | `order:form:view:college` | 本院表单（分页） |
+| GET | `/api/secretary/order-forms/{id}` | `order:form:view:college` | 本院表单详情（BE-3） |
 | GET | `/api/admin/order-forms` | `order:form:view:all` | 全院表单（复核工作台） |
-| GET | `/api/admin/order-forms/{id}` | `order:form:view:all` | 详情（含 field_check_result） |
-| POST | `/api/admin/order-forms/{id}/review` | `order:form:review` | 通过/驳回（理由必填） |
+| GET | `/api/admin/order-forms/{id}` | `order:form:view:all` | 详情（含 field_check_result、contentVersion） |
+| POST | `/api/admin/order-forms/{id}/review` | `order:form:review` | 通过/驳回（理由必填；`contentVersion` 做 CAS） |
 | GET | `/api/student/book-list` | `student:order:submit` | 本班教材清单（必修标识/是否已下架） |
 | GET | `/api/student/order` | `student:order:submit` | 本人选购单 |
 | POST | `/api/student/order/submit` | `student:order:submit` | 提交（覆盖语义） |
-| GET | `/api/student/orders` | `student:order:view:self` | 历史选购记录 |
+| GET | `/api/student/orders` | `student:order:view:self` | 历史选购记录（跨学期摘要） |
 | GET | `/api/admin/student-orders` | `student:order:view:all` | 全院选购（分页） |
 | POST | `/api/teacher/change` | `change:request:submit` | 逐条提交异动 |
 | POST | `/api/secretary/change` | `change:request:submit` | 逐条提交异动 |
-| POST | `/api/secretary/change/import` | `change:request:submit` | 批量导入（返回 batchId + batchNo） |
+| POST | `/api/secretary/change/import` | `change:request:submit` | 批量导入（BE-7b：**异步批次，只返回 `{batchId}`**） |
+| GET | `/api/secretary/change/template` | `change:request:submit` | 异动导入模板下载（BE-7c） |
 | GET | `/api/teacher/change` | `change:request:submit` | 我的提交记录 |
-| GET | `/api/admin/change` | `change:request:review` | 审批列表（支持 batchNo 过滤） |
+| GET | `/api/change/org-options` | `change:request:submit` | 提交端目标归属选项（只读 id + 名称） |
+| GET | `/api/admin/change` | `change:request:review` | 审批列表（支持 batchNo/type 过滤） |
 | POST | `/api/admin/change/{id}/review` | `change:request:review` | 单条审批 |
-| POST | `/api/admin/change/batch/review` | `change:request:review` | 按批次批量通过/驳回 |
+| POST | `/api/admin/change/batch/review` | `change:request:review` | 按批次批量通过/驳回（仅支持按 batchNo） |
 
-### 11.5 通知、导出、看板、配置、审计、供货商
+### 11.5 通知、导出、看板、配置、审计、供货商（25）
 
 | 方法 | 路径 | 权限码 | 说明 |
 |------|------|--------|------|
-| GET | `/api/notice/unconfirmed` | 登录 | 未确认任务队列（阻塞弹窗数据源，含停止重发未确认） |
+| GET | `/api/notice/unconfirmed` | 登录 | 未确认任务队列（阻塞弹窗数据源） |
+| GET | `/api/notice/mine` | 登录 | 我的通知（全量含已确认，分页） |
 | POST | `/api/notice/{taskId}/confirm` | 登录 | 确认（幂等，可带 subscribe_result，204） |
-| GET | `/api/admin/notice/tasks` | `notice:task:view` | 任务列表 |
+| GET | `/api/notice/subscribe-config` | 登录 | 通知配置下发（BE-5e：`{subscribeTemplateId, popupQueueMax}`） |
+| POST | `/api/notice/confirm-by-entry` | 登录 | 进入选书页即确认（BE-5g：`{confirmed:n}`，幂等） |
+| GET | `/api/admin/notice/tasks` | `notice:task:view` | 任务列表（`?semesterId=` 可查历史学期） |
 | POST | `/api/admin/notice/tasks` | `notice:task:manage` | 手动创建（同学期仅 1 个 active） |
 | POST | `/api/admin/notice/tasks/{id}/close` | `notice:task:manage` | 手动关闭 |
+| POST | `/api/admin/notice/tasks/{id}/send-now` | `notice:task:manage` | 立即发送一轮（BE-5b） |
 | GET | `/api/admin/notice/tasks/{id}/progress` | `notice:task:view` | 发送/确认进度 |
 | GET | `/api/admin/notice/tasks/{id}/failures` | `notice:task:view` | 未授权/失败名单 |
 | POST | `/api/admin/export/orders` | `export:order:create` | 教师征订明细导出 |
-| POST | `/api/secretary/export/signature` | `export:signature:create` | 秘书签字版导出（M4） |
+| POST | `/api/secretary/export/signature` | `export:signature:create` | 秘书签字版导出 |
 | POST | `/api/admin/export/students` | `export:student:create` | 学生选购汇总（参考用量） |
-| POST | `/api/admin/export/notice` | `export:notice:create` | 通知汇总 |
-| GET | `/api/export-task/{id}` | 对应导出权限码 | 导出进度 |
-| GET | `/api/export-task/{id}/download` | 对应导出权限码 | 一次性下载（410 过期） |
+| POST | `/api/admin/export/notice` | `export:notice:create` | 通知汇总（含渠道列） |
+| GET | `/api/export-task/{id}` | 登录（**非 ADMIN 仅本人任务，否则 404**） | 导出进度（无 `@PreAuthorize`，按归属判定） |
+| GET | `/api/export-task/{id}/download` | 同上 | 一次性下载（`?token=`，410 过期） |
 | GET | `/api/admin/dashboard` | `dashboard:stat:view` | 各学院提交进度/窗口状态/待复核数/未确认通知数 |
-| GET | `/api/admin/config` | `config:config:manage` | 配置列表 |
+| GET | `/api/admin/config` | `config:config:manage` | 配置列表（8 键） |
 | PUT | `/api/admin/config` | `config:config:manage` | 更新（键白名单 + 值域校验） |
 | GET | `/api/admin/audit` | `audit:log:view` | 审计查询（操作者/动作/资源/时间过滤） |
 | GET | `/api/supplier/orders` | `supplier:order:view` | 按学院分组清单（书名/ISBN/数量/教师姓名/学院） |
 | POST | `/api/supplier/export` | `supplier:order:export` | 一学院一 sheet 导出（异步阈值同导出中心） |
-| GET | `/api/supplier/export-task/{id}` | `supplier:order:export` | 进度与下载 |
+| GET | `/api/supplier/export-task/{id}` | `supplier:order:export` | 供货商导出进度（仅限本人任务） |
+| GET | `/api/supplier/export-task/{id}/download` | `supplier:order:export` | 供货商导出一次性下载（`?token=`） |
 
 ## 12. 事务与幂等边界
 
@@ -649,7 +692,7 @@ STUDENT   → user_id = #{currentUserId}
 | `spring.datasource.*` | 连接池（HikariCP） |
 | `mybatis-plus.*` | 逻辑删除字段 `deleted`（0 未删，时间戳删除） |
 | `springdoc.api-docs.enabled` | 生产环境建议关闭或加权限 |
-| `textbook.import.max-file-mb` | 上传上限（默认 10） |
+| `import.max_file_mb`（**DB `system_config` 键**，非 yml） | 上传上限（默认 10；`ConfigService.IMPORT_MAX_FILE_MB`，值域 1-100） |
 | `textbook.import.pool.*` | 导入线程池参数 |
 | `textbook.export.tmp-dir` | 导出临时目录（24 小时后清理） |
 | `textbook.export.sync-row-threshold` | 同步/异步阈值（默认 5000） |

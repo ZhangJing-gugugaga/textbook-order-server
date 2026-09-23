@@ -1,6 +1,6 @@
 # 教材征订系统 · 服务端 API 手册
 
-> 版本 V1.1.0 · 2026-09-23 · 依据 `SPEC.md` §11 契约基线（111 个端点；V1.0.1–3 联调新增 3 个最小权限只读端点，V1.0.7 新增导入预览与撤销归档，V1.1.0 落地即时决策 BE-1~BE-8 共 14 个新端点）
+> 版本 V1.1.1 · 2026-09-23 · 依据 `SPEC.md` §11 契约基线（111 个端点；V1.0.1–3 联调新增 3 个最小权限只读端点，V1.0.7 新增导入预览与撤销归档，V1.1.0 落地即时决策 BE-1~BE-8 共 14 个新端点，V1.1.1 为**文档一致性修订**，契约零变更）
 > 定位：**前后端联调速查手册**。唯一契约源为 springdoc-openapi 生成的 OpenAPI 3 文档（`GET /v3/api-docs`、`/swagger-ui.html`），本文档与代码同步维护，冲突时以 OpenAPI 为准。
 > 配套文档：[README.md](README.md)（环境/账号/测试）、[docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)（实现范围与裁剪）、[docs/deployment.md](docs/deployment.md)（部署）
 
@@ -60,7 +60,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 
 **refresh 轮换建议实现**：响应拦截器捕获 401 `TOKEN_EXPIRED` → 用 refreshToken 调 `/api/auth/refresh` → 覆盖本地令牌 → 重放原请求；`REFRESH_INVALID`/`ACCOUNT_DISABLED` → 清本地令牌并跳登录页。
 
-### 1.5 权限码（39 条：37 条 M1 冻结 + 2 条角色管理）
+### 1.5 权限码（39 条 = M1 冻结 37 + BE-2 角色管理 2）
 
 格式 `模块:业务:操作`。角色默认权限（种子数据，见 `db/data-permission.sql`）：
 
@@ -87,6 +87,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | `BOOK_DELISTED` | 400 | 部分教材已下架，请核对后重新提交 | 学生选购含下架教材 |
 | `PASSWORD_POLICY` | 400 | 新密码需 8 位以上且含字母和数字 | |
 | `CONFIG_VALUE_INVALID` | 400 | 配置值不合法 | 配置键白名单/值域 |
+| `BIZ_ERROR` | 400 | 操作失败 | 业务兜底（如文件落盘失败）；具体原因在 `message` 中给出 |
 | `FILE_TYPE_INVALID` / `FILE_TOO_LARGE` | 400 | 仅支持 .xlsx 文件 / 文件超过大小上限 | 导入上传 |
 | `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` / `REFRESH_INVALID` | 401 | 登录已过期，请重新登录 | 见 §1.4 三类语义 |
 | `LOGIN_FAILED` | 401 | 账号或密码不正确 | 防账号枚举 |
@@ -111,15 +112,15 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 
 | 域 | 取值 |
 |----|------|
-| 教师征订单 `status` | `draft` 草稿 · `pending_review` 待审核 · `reviewed` 已通过（计入汇总/进学生清单）· `rejected` 已驳回（可补正）· `rejected_auto` 字段审查未过（可修复重提）· `submitted` 已提交（瞬时态） |
-| 学生选购单 `status` | `draft` · `submitted` 已提交（重提=整单覆盖） |
-| 异动 `status` | `pending_field_check` · `pending_review` 待审批 · `approved` 已通过（立即生效）· `rejected` 已驳回 |
+| 教师征订单 `status` | `draft` 草稿 · `pending_review` 待审核 · `reviewed` 已通过（**终态**，计入汇总/进学生清单）· `rejected` 已驳回（可补正）· `rejected_auto` 字段审查未过（可修复重提）。**共 5 态**；`submitted`/`field_check` 为历史死值，代码中从不写入（见 §3.6 状态机） |
+| 学生选购单 `status` | `draft` · `submitted` 已提交（重提=整单覆盖）。**无 `closed` 态**：关窗锁定由窗口引擎在提交时拦截（409 `WINDOW_CLOSED`），不是单据状态 |
+| 异动 `status` | `pending_review` 待审批 · `approved` 已通过（立即生效）· `rejected` 已驳回（字段审查不过即直接落此态）；`pending_field_check` 为历史值，自 2026-09-22 起不再产生（BE-7d） |
 | 学期 `activeStatus` | `draft` 可导入 · `active` 当前 · `archived` 只读归档 |
 | 窗口 `windowStatus` | `not_open` 未开始 · `open` 进行中 · `closed` 已截止（延长可回到 open） |
 | 导入批次 `status` | `running` · `done` · `failed` |
 | 导出任务 `status` | `queued` · `running` · `done` · `failed` · `expired`（文件 24h 过期清理） |
 | 通知任务 `status` | `active` · `closed`；`source`：`manual` 手动 / `system_window_change` 窗口变更自动 |
-| 发送状态 `sendStatus` | `sent` 已发送 · `unauthorized` 未授权（进线下兜底名单）· `failed` 失败 |
+| 发送状态 `sendStatus` | `sent` 已发送 · `unauthorized` 未授权（进线下兜底名单）· `failed` 失败 · `confirmed` 已确认 · `confirmed_by_entry` 进入选书页即确认（`POST /api/notice/confirm-by-entry`，BE-5g） |
 | 账号状态 | `status`：1 正常 / 0 停用；`mustChangePassword`/`firstLoginVerified`：1/0 |
 
 ### 1.8 文件上传与下载
@@ -239,11 +240,11 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 }
 ```
 
-### 3.2 学期与窗口（12）
+### 3.2 学期与窗口（13）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
-| GET | `/api/semester/window/status` | `semester:window:view` | `{semesterId, semesterName, windowStatus, windowStart, windowEnd, channelOpen, serverTime}` — **倒计时以 serverTime 为准，不信任本地时钟** |
+| GET | `/api/semester/window/status` | `semester:window:view` | `{semesterId, semesterName, windowStatus, windowStart, windowEnd, channelOpen, serverTime, activeStatus}` — **倒计时以 serverTime 为准，不信任本地时钟**；`activeStatus` = 该学期 `draft/active/archived`（B-U6：此前漏记）。无 active 学期时只返回 `{serverTime, semesterId:null, windowStatus:null}` |
 | GET | `/api/admin/semester` | `semester:semester:manage` | 学期列表（draft/active/archived） |
 | GET | `/api/admin/semester/{id}` | `semester:semester:manage` | 学期详情 |
 | POST | `/api/admin/semester` | `semester:semester:manage` | 新建学期（draft） |
@@ -326,7 +327,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 
 > **征订范围 = 任课关系表**（W17）：某课程本学期不征订 = 不导入该任课关系。
 
-### 3.5 账号管理（6）
+### 3.5 账号管理（8）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
@@ -339,7 +340,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | GET | `/api/admin/user/import/template` | 同上 | `?role=student|teacher` 模板下载（学生：学号/姓名/学院/专业/班级/手机号；教师：工号/姓名/学院/手机号） |
 | PUT | `/api/admin/user/{id}/roles` | `user:account:manage` | **账号角色全量覆盖**（BE-2）：`{roleCodes:[...]}` 至少 1 个；成功后 `role_version+1` + 撤销全部 refresh（**强制重新登录**，权限即时生效）；不能移除本人最后一个超管角色（400）；响应体不下发新 token |
 
-**角色与权限管理（BE-2 · 7 端点）**
+**角色与权限管理（BE-2 · 6 端点）**
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
@@ -472,7 +473,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 **通知调度与归档（BE-5a/5c/5d/5f）**
 
 - **发送前校验窗口**：`window_status != 'open' || channel_open != 1` 时重发直接跳过（不产生任何 `notice_record`）；窗口**关闭**（提前截止/自动到点截止）会把该学期 active 任务置 `closed`（`closed_by` 留空 = 系统关闭），不再追加「请尽快提交」类文案。
-- **重发节奏**：调度改为**每小时第 5 分钟**扫描 + `notice.interval_hours` 间隔判定（任务创建时快照）；**新任务无发送记录 → 立即发首轮**（不再等次日 09:30），此后距最近一轮不足 `interval_hours` 则跳过。`round_limit` 仍为订阅消息轮次上限，弹窗不设上限。
+- **重发节奏**：调度为**每小时第 5 分钟**扫描（`@Scheduled(cron = "0 5 * * * ?")`）+ `notice.interval_hours` 间隔判定（**读 `system_config` 当前值，改动立即对未完结任务生效**）；**新任务无发送记录 → 立即发首轮**（不等下一个整点），此后距最近一轮不足 `interval_hours` 则跳过。`round_limit` 同为 `system_config` 当前值，仅限制**订阅消息**轮次，弹窗不设上限。
 - **学期归档迁移**：学期归档时把该学期 `notice_record` 分批迁入 `notice_record_history`（主表只留未归档学期）；进度、失败名单、通知汇总导出对两表 `UNION ALL` 查询，历史任务仍可查可导。
 - **通知汇总导出新增「渠道」列**（位置：班级之后）：`订阅消息+弹窗`（存在 `sent` 轮次）/ `仅弹窗（未授权）`（无 `sent` 但有 `unauthorized`）/ `仅弹窗`（无任何轮次记录，教师/秘书以弹窗为主触达）。
 
@@ -496,7 +497,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
                                              → GET /api/export-task/{taskId}/download?token=<downloadToken>
 ```
 
-### 3.11 通知确认闭环（3 + 管理端 5）
+### 3.11 通知确认闭环（3 + 管理端 6 + 配置与入口 2）
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
@@ -523,7 +524,7 @@ POST /api/auth/login  →  { accessToken, refreshToken, expiresIn, mustChangePas
 | GET | `/api/admin/audit` | `audit:log:view` | 审计查询 `?userId&userNo&action&resource&startAt&endAt&page&size`（时间接受 ISO-8601 与 `yyyy-MM-dd HH:mm:ss`，另接受纯日期 `yyyy-MM-dd`：`startAt` 取当日 00:00:00、`endAt` 取当日 23:59:59.999999999 含当天整天；开始晚于结束 → 400） |
 | GET | `/api/admin/dashboard` | `dashboard:stat:view` | 看板：`{semesterId, windowStatus, channelOpen, serverTime, colleges:[{collegeId,collegeName,teacherTotal,submitted,pendingReview,reviewed,rejected}], pendingReviewTotal, unconfirmedNoticeTotal, studentOrderTotal, studentSubmittedTotal}` |
 
-**配置键清单（8）**：`notice.round_limit`(5) · `notice.interval_hours`(24) · `notice.popup_queue_max`(5) · `order.quantity.max_default`(999) · `order.correct_window_days`(7) · `export.sync_row_threshold`(5000) · `export.download_token_minutes`(10) · `import.max_file_mb`(10)。变更立即对未完结通知任务生效——**例外**：`notice.interval_hours` 目前只作为任务快照展示，重发由每日 09:30 的定时任务驱动，改大/改小不会改变实际发送节奏（待实现，见 .project-state.md 待确认项）。
+**配置键清单（8）**：`notice.round_limit`(5) · `notice.interval_hours`(24) · `notice.popup_queue_max`(5) · `order.quantity.max_default`(999) · `order.correct_window_days`(7) · `export.sync_row_threshold`(5000) · `export.download_token_minutes`(10) · `import.max_file_mb`(10)。变更立即对未完结通知任务生效——`notice.round_limit` 与 `notice.interval_hours` **均按 `system_config` 当前值实时判定**（前者为订阅消息轮次上限，后者为两轮之间的最小间隔；调度每小时扫描一次，改动最迟下一小时生效）。`notice_task` 表上同名字段仅为创建时快照（展示与追溯用，不参与判定）。
 
 ### 3.13 供货商只读（4，物理隔离）
 
@@ -642,3 +643,4 @@ POST /api/admin/export/orders  {"semesterId":1}
 | 2026-09-22 | 上线前复审修复（V1.0.6） | ① **窗口变更重置轮次撞唯一键**：`onWindowChange` 的逻辑删除语句漏 `deleted=0`，第二次窗口变更（重发之后）会撞 `uk_notice_round` → 整个变更事务回滚，自动截止每分钟重试每分钟失败，**窗口再也关不上**（延长/提前截止同样失败）。② **教师提交与审核并发**：提交侧只有「读后判断」，与审核并发时会把 `reviewed` 静默改回 `pending_review`（审批结论被撤销，audit_log 却留着已审核）——提交事务内改为对该表单行加锁并重读状态（`selectByIdForUpdate`）。③ **编辑学期基本信息回写整实体**：会把 `window_status/channel_open/version/active_status` 按旧快照写回（窗口被静默重开、version 回退；极端情况把已激活学期写回 draft → 全站无 active 学期），改为只写请求字段。④ **首登 wxCode 分支可接管账号**：wxCode 换来的 openid 原直接绑定并置已验证，未与已有 openid 比对——改为「只校验已绑定 openid，绑定仅发生在手机号后 4 位通过之后」。⑤ **重置密码不清 `first_login_verified`**：重置后（口令回到学号后 6 位）可跳过首登校验直接改密，已一并清零。⑥ **draft 学期名单导入全局停用账号**：停用比对候选集来自 `sys_user.college_id`（active 学期冗余列），对 draft 学期导入会把 active 在册的人误停用；现仅在「目标学期 = active 学期」时执行。⑦ 可信代理配置绑定修复（`TEXTBOOK_TRUSTED_PROXIES` 此前无占位符，配了不生效，审计 IP 恒为 127.0.0.1）。⑧ 通知任务合并时 `target_roles` 取并集（此前合并进手动 STUDENT-only 任务后，教师/秘书收不到窗口变更通知）。⑨ `local` profile 连非本机库直接拒绝启动；定时任务线程池 1 → 3（通知重发不再阻塞窗口引擎）。 |
 | 2026-09-23 | 生产缺陷修复（V1.0.7） | ① **archive 无门禁（P1）**：`POST /api/admin/semester/{id}/archive` 此前不读 body、无任何确认，线上一次空 body 调用即把进行中的学期归档——归档后全站没有 active 学期，学生选购/教师填报/导出统一报「当前没有激活学期」，业务停摆且只能整库备份恢复。现要求 body 带 `version`（乐观锁，缺失 400），且学期窗口进行中（`window_status=open` 或 `channel_open=1`）时必须 `confirmWindowOpen=true`，否则 409 并说明影响；归档同时 `version+1`（否则归档前后 version 相同，乐观锁形同虚设）。② **撤销归档（受限回滚，P2）**：新增 `POST /api/admin/semester/{id}/unarchive`，仅在「当前无任何 active 学期」（误归档现场）时允许，需 `version` + `confirm=true`；窗口保持 closed，须手动重开。③ **重复 activate 语义修正（P2）**：空 body 调 activate 此前在反序列化阶段就 400（`@RequestBody` 必填），把「该学期已是激活学期」的 409 掩盖成参数错误；现 body 改为可选、校验顺序为「先状态后参数」，并区分 archived（409，指向 unarchive）与 active（409「已是激活学期」）。④ **局部名单防护（P1）**：学生名单导入按文件内人数重算班级人数（教师填报数量上限），下调比例 > 20% 且 ≥ 5 人时视为疑似局部名单，导入直接 409（不建批次、不改人数）并回显逐班 diff，须带 `confirmClassSizeShrink=true` 重提；新增只读预览 `POST /api/admin/user/import/preview`（班级人数 diff / 将新建账号数 / 将停用账号数 / 错误样例），导入摘要补 `classSizeShrinkConfirmed`。⑤ **时间入参口径补全（P2）**：`PUT /api/admin/semester/{id}` 的 body 与窗口接口一致（ISO 与空格都接受，出参恒为 ISO）——此前「body 空格一律 400」的记录是 TimeFormatConfig 上线前的旧行为；`LocalDate` 字段（`startDate`/`endDate`）同样容忍带时间的写法并按日期取值，非法值仍 400 且提示 `yyyy-MM-dd`。⑥ 新增 `db/cleanup-seed-accounts.sql`：联调后一次性停用 18 个公开口令种子账号（幂等、附校验 SQL），部署手册同步。 |
 | 2026-09-23 | **即时决策落地（V1.1.0，BE-1~BE-8）** | ① **超管全权限（BE-1）**：`ADMIN` 在鉴权层短路持有全部 39 条权限（`AuthUserService#permissionsFor` + Caffeine 5 分钟缓存，角色/权限变更时失效），所有 `@PreAuthorize` 对超管放行、业务校验照常；`sys_role_permission` 的 28 行保持不变（只服务前端菜单过滤）。② **角色与权限管理（BE-2）**：新增 `role:manage` / `role:permission:assign`（37 → 39）与 7 个端点（角色 CRUD、角色-权限全量覆盖、权限目录、账号角色覆盖）；内置角色不可删、编码不可改，ADMIN 权限不可改；账号角色变更 `role_version+1` + 撤销 refresh（强制重新登录）。③ **教师/秘书明细端点（BE-3）**：新增 `GET /api/teacher/order-forms/{id}` 与 `GET /api/secretary/order-forms/{id}`——修复线上「点明细必然 403」（前端原调超管端点）。④ **教师主动撤回（BE-4）**：`POST /api/teacher/order-form/withdraw`（`pending_review → draft`，窗口内、无补正豁免），新增 `order_form.withdrawn_at`，审计动作 `WITHDRAW`；与审核并发由行锁串行化（审核 CAS 落空 409，审批结论不会被静默撤销）。⑤ **通知模块补齐（BE-5a~5g）**：发送前校验窗口 + 窗口关闭自动关闭任务；`send-now` 立即发送；调度改「每小时 + interval_hours 判定」（新任务立即发首轮）；`notice_record.semester_id` + `notice_record_history` 归档表（导出/进度 UNION 查询）；`subscribe-config` 下发模板 id；`confirm-by-entry` 入口确认（`confirmed_by_entry`，`send_status` 加宽到 24）；导出补「渠道」列。⑥ **`reserve1~6` 全表补齐（BE-6）**：22 张表补 6 列预留字段（新装库与迁移库结构零漂移）。⑦ **异动链路（BE-7）**：`change_request.change_type` 枚举（转专业/留级/专升本/其他）+ 导入第 6 列 + 列表筛选；导入改为异步批次（`{batchId}`）；新增模板下载端点（表头 6 列，「变更类型」→「异动对象」）。⑧ **收尾（BE-8）**：审计常量 `ROLE`/`WITHDRAW`；`order_form.status` 注释与状态机对齐（移除死值 `submitted`）、`change_request.status` 标注 `pending_field_check` 为历史值。迁移脚本 4 个（`migration-2026-09-23-role-permission / order-withdraw / notify / reserve`），测试 248 → 280 用例（0 失败） |
+| 2026-09-23 | **文档一致性修订（V1.1.1，契约零变更）** | 按 `docs/13-后端文档对齐-goal-prompt-20260923.md` 消除文档与实现漂移，**不改任何请求/响应形状、状态码、错误码字符串**：① §1.7 教师征订单枚举删死值 `submitted`（与 §3.6 自述矛盾）、异动枚举标注 `pending_field_check` 为历史值、`sendStatus` 补齐 `confirmed`/`confirmed_by_entry`；② §1.6 补 `BIZ_ERROR`（`ErrorCode` 每个常量均可查）；③ §3.12 `notice.interval_hours` 由「待实现、每日 09:30 驱动」改为实际语义（`system_config` 当前值实时判定，每小时第 5 分钟扫描）；④ 修正四处标题计数与实际行数不符（§3.2 13、§3.5 8、角色表 6、§3.11 11）；⑤ §3.2 补 `activeStatus` 字段。新增门禁脚本 `scripts/check-api-md.mjs`（端点集合/标题计数/枚举与错误码覆盖四项校验，纳入 `verify-be`） |

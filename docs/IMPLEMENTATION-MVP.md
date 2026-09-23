@@ -2,7 +2,7 @@
 
 > 依据：PRD.md V1.1.0 / SPEC.md V1.0.0 / 03-后端开发计划与决策.md v3
 > 本文说明本次 MVP 已实现的功能范围、因 MVP 裁剪暂未包含的功能点、以及与文档的落地偏差。
-> **前后端联调接口手册见仓库根 [API.md](../API.md)**（95 端点、权限码、错误码、关键流程、联调注意事项）。
+> **前后端联调接口手册见仓库根 [API.md](../API.md)**（111 端点、权限码、错误码、关键流程、联调注意事项）。
 
 ## 一、实现范围（对照 PRD 功能列表）
 
@@ -17,7 +17,7 @@
 - 超管建号（含供货商）/停用（即时踢下线）/重置密码；Excel 全量导入即批量建号
 
 ### 2. RBAC 与数据隔离（模块 2，P0）— 已实现
-- 五表 + 37 条权限码种子（随契约冻结）；`模块:业务:操作` 格式；`@PreAuthorize` 方法级鉴权
+- 五表 + 39 条权限码种子（随契约冻结：M1 冻结 37 + BE-2 新增 2）；`模块:业务:操作` 格式；`@PreAuthorize` 方法级鉴权
 - 数据隔离：MyBatis-Plus DataPermissionInterceptor + `@CollegeScope`，**多角色并集**（ADMIN 不过滤 / SECRETARY 学院 / TEACHER·STUDENT 本人）；未标注即不隔离
 - 跨表学院范围（秘书查本院表单）由 Service 显式传参 + Mapper XML join `user_semester_profile`（归属真源，W6）实现
 - 资源归属二次校验（按 id 取单条时校验归属，防 IDOR，失败 403 + 审计）
@@ -59,7 +59,7 @@
 ### 7. 通知确认闭环（模块 7，P1）— 已实现
 - 通知任务：手动（同学期仅 1 个 active，重复 409）+ 窗口变更自动（合并进同一任务：追加内容 + 重置轮次计数，W18）
 - 确认闭环：`GET /api/notice/unconfirmed`（阻塞弹窗数据源，含已停止重发未确认的，Q7）+ `POST /api/notice/{taskId}/confirm` 幂等（首次生效，204）
-- 订阅消息重发：每日 09:30（Asia/Shanghai），仅未确认 STUDENT 且有 openid；`send_status ∈ {sent, unauthorized, failed}` 如实落库（不做假「已送达」）
+- 订阅消息重发：**每小时第 5 分钟扫描 + `notice.interval_hours` 间隔判定**（新任务立即发首轮；参数实时读 `system_config`），仅未确认 STUDENT 且有 openid；`send_status ∈ {sent, unauthorized, failed, confirmed, confirmed_by_entry}` 如实落库（不做假「已送达」）
 - 轮次上限与间隔以 `system_config` 为唯一真源、改动对未完结任务立即生效（W8）；`notice_task` 两字段为创建时快照
 - 弹窗通道不设轮次上限；未授权名单进线下兜底（progress/failures 接口可查，W5/R10）
 - 通知汇总导出（学号/工号、姓名、角色、学院、班级、各轮发送时间/状态、确认状态/时间）

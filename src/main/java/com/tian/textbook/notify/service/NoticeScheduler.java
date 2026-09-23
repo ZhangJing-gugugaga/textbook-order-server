@@ -6,6 +6,7 @@ import com.tian.textbook.notify.entity.NoticeTask;
 import com.tian.textbook.notify.mapper.NoticeTaskMapper;
 import com.tian.textbook.semester.SemesterActiveService;
 import com.tian.textbook.semester.entity.Semester;
+import com.tian.textbook.system.config.ConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -27,6 +28,10 @@ import java.util.List;
  * （新任务）→ 立即发首轮；距最近一轮不足 interval_hours → 跳过；否则发下一轮。
  * 窗口非开放时 {@link NotifyService#resendTask} 自行跳过（BE-5a）。</p>
  *
+ * <p><b>间隔判定读 system_config 当前值</b>（而非 {@code notice_task.interval_hours} 快照）：
+ * 与 {@code round_limit} 语义统一——两者都是「配置表唯一真源、改动对未完结任务生效」（W8）；
+ * 表上同名列仅为创建时快照，供列表展示与追溯。改动最迟在下一小时的扫描轮生效。</p>
+ *
  * <p>test profile 下关闭（测试直接调 NotifyService 方法，保证确定性）。</p>
  */
 @Slf4j
@@ -41,6 +46,7 @@ public class NoticeScheduler {
     private final NotifyService notifyService;
     private final NoticeTaskMapper noticeTaskMapper;
     private final SemesterActiveService activeSemesterService;
+    private final ConfigService configService;
 
     @Scheduled(cron = "0 5 * * * ?", zone = "Asia/Shanghai")
     public void resendUnconfirmed() {
@@ -59,7 +65,7 @@ public class NoticeScheduler {
                 try {
                     if (!intervalElapsed(task)) {
                         log.info("距上一轮发送不足 interval_hours，跳过本轮: task={}, intervalHours={}",
-                                task.getId(), task.getIntervalHours());
+                                task.getId(), currentIntervalHours());
                         continue;
                     }
                     notifyService.resendTask(task);
@@ -73,18 +79,21 @@ public class NoticeScheduler {
         }
     }
 
+    /** 当前生效的间隔（system_config 实时读取，W8；无缓存，见 {@link ConfigService}） */
+    private int currentIntervalHours() {
+        int configured = configService.getInt(ConfigService.NOTICE_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS);
+        return configured <= 0 ? DEFAULT_INTERVAL_HOURS : configured;
+    }
+
     /**
      * 是否已到下一轮发送时间：无发送记录 → 立即发（新任务首轮不必等下一个周期）；
-     * 否则要求距最近一轮 ≥ {@code interval_hours}（任务创建时快照自 system_config，W8）。
+     * 否则要求距最近一轮 ≥ {@code notice.interval_hours}（**system_config 当前值**，W8）。
      */
     private boolean intervalElapsed(NoticeTask task) {
         java.time.LocalDateTime lastSentAt = notifyService.lastSentAt(task.getId());
         if (lastSentAt == null) {
             return true;
         }
-        int intervalHours = task.getIntervalHours() == null || task.getIntervalHours() <= 0
-                ? DEFAULT_INTERVAL_HOURS
-                : task.getIntervalHours();
-        return !AppTime.now().isBefore(lastSentAt.plusHours(intervalHours));
+        return !AppTime.now().isBefore(lastSentAt.plusHours(currentIntervalHours()));
     }
 }

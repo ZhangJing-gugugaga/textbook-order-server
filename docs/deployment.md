@@ -2,13 +2,14 @@
 
 ## 1. 环境要求
 
-- JDK 17+、MySQL 8.0.36+（utf8mb4）、Nginx（HTTPS）、2C4G 起
-- 域名已备案（moonzj.com），系统挂在子路径 `/textbook/`（前端）+ `/api/`（后端）
+- JDK 17+、MySQL 8.0.36+（utf8mb4）、反向代理（HTTPS；模板给 Nginx，生产实际用 Caddy，见 §5.3）、2C4G 起
+- 域名已备案（moonzj.com）。**模板拓扑**：系统挂在子路径 `/textbook/`（前端）+ `/api/`（后端）；
+  **生产实际拓扑**：子域名 `textbooksorder.moonzj.com` 根路径（前端 `root * /var/www/textbook-order`）+ `/api/*` 反代 `127.0.0.1:8081`。偏差记录见 §5.3
 
 ## 2. 数据库初始化（DBA 执行，按顺序）
 
 ```bash
-# ① 建库 + 建应用账号（应用用这个账号连库，不是 root；口令与 /etc/textbook/env 的 DB_PASSWORD 一致）
+# ① 建库 + 建应用账号（应用用这个账号连库，不是 root；口令与 /opt/textbook-order/textbook.conf 的 DB_PASSWORD 一致）
 mysql -uroot -p <<'SQL'
 CREATE DATABASE IF NOT EXISTS textbook_order DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 CREATE USER IF NOT EXISTS 'textbook'@'localhost' IDENTIFIED BY '<强口令>';
@@ -19,7 +20,7 @@ SQL
 
 # ② 建表 + 权限码（用应用账号执行即可）
 mysql -utextbook -p textbook_order < src/main/resources/db/schema.sql          # 全量 DDL（IF NOT EXISTS，可重复执行）
-mysql -utextbook -p textbook_order < src/main/resources/db/data-permission.sql # 37 条权限码 + 五角色映射
+mysql -utextbook -p textbook_order < src/main/resources/db/data-permission.sql # 39 条权限码 + 五角色映射
 # data-seed.sql 仅用于本地/演示环境（内含已知口令的测试账号），严禁在生产执行
 ```
 
@@ -90,7 +91,7 @@ mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-rese
 > 而新增的批次归属校验对非 ADMIN 要求 `created_by = 本人`，故**历史批次对秘书不可见（404）**。
 > 这是有意的 fail-closed 选择（无法推断历史批次的上传者，放行等于重开枚举漏洞）。
 
-## 3. 环境变量（/etc/textbook/env，systemd EnvironmentFile）
+## 3. 环境变量（/opt/textbook-order/textbook.conf，systemd EnvironmentFile）
 
 ```ini
 DB_URL=jdbc:mysql://127.0.0.1:3306/textbook_order?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
@@ -100,7 +101,7 @@ JWT_SECRET=<openssl rand -base64 48 生成，≥32字节>
 WX_MINIAPP_APPID=<小程序 AppID>
 WX_MINIAPP_SECRET=<小程序 Secret>
 WX_SUBSCRIBE_TEMPLATE_ID=<订阅消息模板 id（未申请前可留空，重发记 unauthorized）>
-TEXTBOOK_EXPORT_TMP=/opt/textbook/data/export
+TEXTBOOK_EXPORT_TMP=/opt/textbook-order/data/export
 TEXTBOOK_LOG_DIR=/var/log/textbook
 TEXTBOOK_CORS_ORIGINS=https://moonzj.com
 TEXTBOOK_TRUSTED_PROXIES=127.0.0.1,::1
@@ -133,14 +134,14 @@ SPRING_PROFILES_ACTIVE=trial
 先建目录与产物（**漏了这步启动自检会中止**：导出目录不可写）：
 
 ```bash
-# 目录 + 属主（服务以 www-data 运行）
-sudo mkdir -p /opt/textbook/data/export /opt/textbook/backup /var/log/textbook
-sudo chown -R www-data:www-data /opt/textbook /var/log/textbook
+# 目录 + 属主（服务以 textbook 运行）
+sudo mkdir -p /opt/textbook-order/data/export /opt/textbook-order/backup /var/log/textbook
+sudo chown -R textbook:textbook /opt/textbook /var/log/textbook
 
 # 构建并放置可执行 jar（在开发机或服务器上，仓库根目录执行）
 ./mvnw clean package -DskipTests
-sudo cp target/textbook-order-server.jar /opt/textbook/app.jar
-sudo chown www-data:www-data /opt/textbook/app.jar
+sudo cp target/textbook-order-server.jar /opt/textbook-order/app.jar
+sudo chown textbook:textbook /opt/textbook-order/app.jar
 ```
 
 ```ini
@@ -150,13 +151,13 @@ After=network.target mysql.service
 
 [Service]
 Type=simple
-User=www-data
-EnvironmentFile=/etc/textbook/env
+User=textbook
+EnvironmentFile=/opt/textbook-order/textbook.conf
 # WorkingDirectory 必填：textbook.export.tmp-dir / TEXTBOOK_LOG_DIR 的相对路径以它为基准，
 # 缺失时会落到 / 导致不可写（启动自检会因此中止）
 WorkingDirectory=/opt/textbook
 ExecStart=/usr/bin/java -Xms512m -Xmx1024m -Duser.timezone=Asia/Shanghai \
-  -jar /opt/textbook/app.jar --spring.profiles.active=${SPRING_PROFILES_ACTIVE}
+  -jar /opt/textbook-order/app.jar --spring.profiles.active=${SPRING_PROFILES_ACTIVE}
 Restart=always
 RestartSec=5
 # 优雅停机：先停收新请求，等待在途请求与异步导入/导出收尾（最长 30s）
@@ -174,7 +175,7 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload && sudo systemctl enable --now textbook-order-server
 ```
 
-## 5. Nginx（双 location）
+## 5. Nginx（双 location · 模板）
 
 ```nginx
 server {
@@ -291,6 +292,21 @@ Spring Boot 官方 `smoke-test/` 模块 <https://github.com/spring-projects/spri
 > 试运行库（真实数据）与开发机演示库**永远不要**跑冒烟脚本：脚本会改账号锁定与班级人数。
 > 需要验证试运行环境时，用 `scripts/smoke-isolated.sh` 起一次性库，或只跑只读断言。
 
+## 5.3 生产实际拓扑与本文模板的偏差（2026-09-23 核实）
+
+以生产服务器实际配置与 `docs/上线联调验证报告-20260923.md` §3.6 为准：
+
+| 项 | 本文模板 | 生产实际 |
+|----|----------|----------|
+| 反向代理 | Nginx | **Caddy**（`/etc/caddy/Caddyfile`，`caddy validate` 通过；仓库模板用了 `request_body` 指令，官方标注需 ≥ 2.7，生产 2.6.2 实测可用） |
+| 前端路径 | `/var/www` + `location /textbook/`（子路径） | `/var/www/textbook-order`（**子域名根路径**，与 `VITE_BASE=/` 构建产物一致） |
+| 后端端口 | `127.0.0.1:8080` | `127.0.0.1:8081` |
+| 应用目录 / 配置 | `/opt/textbook-order/` + `/opt/textbook-order/textbook.conf` | 一致（systemd `EnvironmentFile=/opt/textbook-order/textbook.conf`，`root:textbook 640`） |
+| 运行账号 | `textbook` | 一致（专用系统用户，nologin） |
+| 安全响应头 | 模板未含 | 生产 Caddyfile 已配 `X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/`-Server`；**CSP、Permissions-Policy、HSTS、Cache-Control 尚未配**（见联调报告 §3） |
+
+> 迁移到生产前，请以服务器实际 Caddyfile 为准逐项核对本模板；前端仓库的 `docs/DEPLOYMENT.md` §2.4 为 Caddy 版模板。
+
 ## 6. 备份（每日 02:00 全量，保留 14 天，W22）
 
 先建凭据文件（cron 没有 TTY，`mysqldump` 不能靠交互输口令；**照抄 `-uroot` 不带口令的脚本会每天生成一个空备份**）：
@@ -305,12 +321,12 @@ host=127.0.0.1
 EOF
 ```
 
-`/opt/textbook/backup.sh`：
+`/opt/textbook-order/backup.sh`：
 
 ```bash
 #!/bin/bash
 set -euo pipefail
-DIR=/opt/textbook/backup
+DIR=/opt/textbook-order/backup
 KEEP_DAYS=14
 STAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p "$DIR"
@@ -331,15 +347,15 @@ echo "备份完成：$FILE ($SIZE 字节)"
 ```
 
 ```bash
-sudo chmod +x /opt/textbook/backup.sh
-crontab -l 2>/dev/null | { cat; echo "0 2 * * * /opt/textbook/backup.sh >> /var/log/textbook/backup.log 2>&1"; } | crontab -
+sudo chmod +x /opt/textbook-order/backup.sh
+crontab -l 2>/dev/null | { cat; echo "0 2 * * * /opt/textbook-order/backup.sh >> /var/log/textbook/backup.log 2>&1"; } | crontab -
 ```
 
 **恢复**（先停服务，避免恢复过程中表被 DROP 引发 500）：
 
 ```bash
 sudo systemctl stop textbook-order-server
-gunzip -c /opt/textbook/backup/textbook_order-YYYYMMDD-HHMMSS.sql.gz \
+gunzip -c /opt/textbook-order/backup/textbook_order-YYYYMMDD-HHMMSS.sql.gz \
   | mysql --defaults-extra-file=/etc/textbook/.my.cnf textbook_order
 sudo systemctl start textbook-order-server
 curl -s localhost:8080/actuator/health   # 期望 {"status":"UP"}
@@ -421,3 +437,38 @@ curl -s localhost:8080/actuator/health   # 期望 {"status":"UP"}
   （Caffeine 进程内）、`SEMESTER_LOCK`（JVM 级锁）都需换分布式锁/外置缓存或 xxl-job（R3）；
   **并须把 `TEXTBOOK_ASYNC_RECOVER=false`**——启动补偿按「`updated_at` 早于本进程启动时刻」
   回收遗留任务，多实例滚动发布时应由运维人工收敛（彻底方案见待确认清单）
+
+## 9. 已知架构边界（登记项 · 本轮不改造）
+
+> 来源：`docs/13-后端文档对齐-goal-prompt-20260923.md` §2（B-G4/B-G5）。逐项写明「现状 + 触发条件 + 改造代价」，供 DBA/运维决策；**当前版本按现状交付，未做改造**。
+
+### 9.1 限单实例部署（B-G4）【重要】
+
+**当前架构限单实例运行，横向扩容前必须改造**——以下机制全部是**进程内实现**，多实例会静默失效：
+
+| 机制 | 实现 | 多实例后果 |
+|------|------|-----------|
+| 登录限频 | Caffeine 进程内计数 | 限频被放大 N 倍，等于没有限频 |
+| 角色/权限缓存 | Caffeine 5 分钟（`AuthUserService`） | 各实例缓存不同步，改权限后行为不一致 |
+| active 学期缓存 | 进程内 | 切换学期后各实例看到的 active 不同 |
+| `SEMESTER_LOCK` | JVM 级 `ReentrantLock` | 窗口变更/学期切换跨实例不再互斥（双缓冲原子性依赖 DB 唯一约束兜底） |
+| 定时任务 | `@Scheduled` + 进程内锁 | 窗口扫描/通知重发/导出清理在 N 个实例上重复执行 |
+| 启动补偿 | 按 `updated_at < 本进程启动时刻` 回收 `running/queued` 任务 | 滚动发布时新实例会误杀旧实例在途任务 → **必须置 `TEXTBOOK_ASYNC_RECOVER=false`** |
+
+- **触发条件**：确认要横向扩容（或要上多副本滚动发布）时。
+- **改造代价**：限频/缓存改 Redis 或 Caffeine+Redis 二级；锁改分布式锁（Redisson/DB 锁）或换 xxl-job 统一调度；启动补偿改由运维人工收敛。约 3-5 人日 + 一次全量回归。
+
+### 9.2 数据完整性工程项（B-G5）
+
+| 项 | 现状 | 触发条件 | 改造代价 |
+|----|------|----------|----------|
+| 外键缺失 | 全库关联列均为裸 `BIGINT`，引用完整性只在应用层（配合逻辑删除 `deleted` 语义，加物理外键会与「逻辑删除后重建同键」冲突） | 出现跨表脏数据事故，或交由 DBA 统一治理时 | 需先定「逻辑删除 vs 物理外键」取舍；全量 DDL 改造 + 数据清洗 + 回归，约 5-8 人日 |
+| 无版本化迁移工具 | `schema.sql` 幂等但不做列级迁移，已上线库的结构变更靠人工按序执行 `db/migration-*.sql`（每次发版须核对清单） | 发版频率上升、或迁移脚本数量超过 10 个时 | 引入 Flyway/Liquibase：需为存量库建立 baseline，历史脚本改写成版本化迁移，约 2-3 人日 |
+| 窗口边界精度 | `window_end` 之后最多 60 秒仍可提交（窗口状态由每分钟 cron 扫描推进，非请求时实时判定） | 要求秒级精确截止时 | 在 `@WithinWindow` 校验里加实时时间判定（与落库状态取或），约 0.5 人日 |
+| 宽列与 `SELECT *` | `sys_user` 含 `reserve1~6`、JSON 列（`field_check_result`/`submit_snapshot`）在热表内；部分查询 `SELECT *` | 单表行数增长到影响查询性能时 | 宽列拆分 + 查询列收敛，需逐条核对 Mapper，约 2-3 人日 |
+
+### 9.3 本轮明确不做
+
+- 多实例改造、外键、Flyway 迁移：**仅登记，不实施**（见 9.1/9.2）。
+- 支付、微服务/消息队列、教学班模型、AI 功能、短信/企业微信催办渠道：PRD 排除项。
+- 生产数据清理（`cleanup-seed-accounts.sql` / `cleanup-demo-and-fixtures.sql`）：属正式开放上线前的独立动作，由甲方决策触发。

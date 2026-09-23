@@ -2,7 +2,7 @@
 
 > Spring Boot 3 单体服务：RBAC 五角色数据隔离、征订窗口引擎、学期数据双缓冲、教师两级审查、学生选购、异动审批、通知确认闭环、Excel 异步导入导出、供货商只读接口。
 >
-> 需求见 [PRD.md](PRD.md)，实现规格见 [SPEC.md](SPEC.md)，开发计划见 [03-后端开发计划与决策.md](03-后端开发计划与决策.md)，**前后端联调接口手册见 [API.md](API.md)**，**本轮联调交接（契约变更/环境/限制）见 [docs/FRONTEND-HANDOFF.md](docs/FRONTEND-HANDOFF.md)**（95 端点/权限码/错误码/关键流程），本次 MVP 实现范围与裁剪点见 [docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)，部署见 [docs/deployment.md](docs/deployment.md)。
+> 需求见 [PRD.md](PRD.md)，实现规格见 [SPEC.md](SPEC.md)，开发计划见 [03-后端开发计划与决策.md](03-后端开发计划与决策.md)，**前后端联调接口手册见 [API.md](API.md)**，**本轮联调交接（契约变更/环境/限制）见 [docs/FRONTEND-HANDOFF.md](docs/FRONTEND-HANDOFF.md)**（111 端点/权限码/错误码/关键流程），本次 MVP 实现范围与裁剪点见 [docs/IMPLEMENTATION-MVP.md](docs/IMPLEMENTATION-MVP.md)，部署见 [docs/deployment.md](docs/deployment.md)。
 >
 > **进度状态（rpd）**：功能进度清单/决策/阻塞见 [.project-state.md](.project-state.md)；会话活跃上下文与下一步见 [.rpd/active-context.md](.rpd/active-context.md)。
 
