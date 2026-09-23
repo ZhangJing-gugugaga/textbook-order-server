@@ -766,8 +766,13 @@ public class NotifyService implements WindowChangeNotifier {
     // ============ 看板统计（stats 模块复用） ============
 
     /**
-     * active 任务目标用户中未确认人数（去重，跨任务并集）。
-     * 目标用户 = target_roles 角色 + active 学期在册 profile（status=1）+ 账号正常。
+     * active 任务目标用户中未确认人数（去重）。
+     * 目标用户 = target_roles 角色 + 该学期在册 profile（status=1）+ 账号正常，减去已确认者。
+     *
+     * <p>口径与 {@link #resolveTargetUsers} 一致，但**在数据库里算**（单条聚合 SQL）：
+     * 此前把目标任务角色的全部用户与全部在册 profile 拉进 JVM 做集合差，成本 O(全部用户)
+     * （3-4 万行、多轮查询），看板每次刷新都要付一遍。同学期至多 1 个 active 任务
+     * （{@code uk_task_active}），故按该任务的角色码过滤即可。</p>
      */
     @Transactional(readOnly = true)
     public long countUnconfirmedTargetUsers() {
@@ -779,16 +784,18 @@ public class NotifyService implements WindowChangeNotifier {
         if (tasks.isEmpty()) {
             return 0L;
         }
-        Set<Long> unconfirmed = new HashSet<>();
-        for (NoticeTask task : tasks) {
-            Set<Long> confirmed = confirmedUserIds(task.getId());
-            for (SysUser user : resolveTargetUsers(task)) {
-                if (!confirmed.contains(user.getId())) {
-                    unconfirmed.add(user.getId());
-                }
-            }
+        List<String> roleCodes = tasks.stream()
+                .map(NoticeTask::getTargetRoles)
+                .filter(Objects::nonNull)
+                .flatMap(roles -> java.util.Arrays.stream(roles.split(",")))
+                .map(String::trim)
+                .filter(code -> !code.isEmpty())
+                .distinct()
+                .toList();
+        if (roleCodes.isEmpty()) {
+            return 0L;
         }
-        return unconfirmed.size();
+        return noticeRecordMapper.countUnconfirmedTargetUsers(semesterId, roleCodes);
     }
 
     /**

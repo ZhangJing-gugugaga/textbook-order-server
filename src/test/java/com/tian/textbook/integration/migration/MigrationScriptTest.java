@@ -124,6 +124,24 @@ class MigrationScriptTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("R2b：2026-09-23 性能索引迁移脚本齐备、幂等守卫齐备（B-G2 ①②）")
+    void migrationScript20260923Perf_addsIndexesIdempotently() throws IOException {
+        String sql = readClasspath("db/migration-2026-09-23-perf.sql").toLowerCase(java.util.Locale.ROOT);
+        for (String needle : List.of("idx_audit_at", "information_schema.statistics",
+                "drop procedure if exists")) {
+            assertThat(sql).as("性能索引迁移缺少 %s", needle).contains(needle);
+        }
+        // 幂等守卫：存在即跳过，否则二次执行必报 Duplicate key name
+        // （按「守卫语句」精确计数，避免把文件头的验证 SQL 注释也算进去）
+        assertThat(sql.split(java.util.regex.Pattern.quote(
+                "if not exists (select 1 from information_schema.statistics"), -1).length - 1)
+                .as("每个索引各需一处幂等守卫").isEqualTo(1);
+        // B-G2①（notice_record 加 user_id 前导索引）经实测未采纳——脚本里必须写明理由，
+        // 避免后人「按文档补索引」重复加一个用不到的索引
+        assertThat(sql).as("脚本需记录 ① 未采纳的理由与证据").contains("未采纳");
+    }
+
+    @Test
     @DisplayName("R2：2026-09-23 四个迁移脚本齐备、幂等守卫齐备、目标对象不漏")
     void migrationScripts20260923_coverRequiredObjects() throws IOException {
         // 脚本 → 必须出现的目标对象（列/表/权限码）与幂等守卫

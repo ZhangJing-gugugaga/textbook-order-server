@@ -62,7 +62,7 @@ public class ImportRowWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void writeStudentRows(List<StudentImportRow> rows, ImportRunContext ctx) {
         Long studentRoleId = ctx.roleId("STUDENT");
-        Map<String, String> passwordHashes = hashInitialPasswords(rows, StudentImportRow::getUserNo);
+        Map<String, String> passwordHashes = hashInitialPasswords(rows, ctx, StudentImportRow::getUserNo);
         for (StudentImportRow row : rows) {
             String userNo = row.getUserNo().trim();
             SysUser user = ctx.user(userNo);
@@ -111,7 +111,7 @@ public class ImportRowWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void writeTeacherRows(List<TeacherImportRow> rows, ImportRunContext ctx) {
         Long teacherRoleId = ctx.roleId("TEACHER");
-        Map<String, String> passwordHashes = hashInitialPasswords(rows, TeacherImportRow::getUserNo);
+        Map<String, String> passwordHashes = hashInitialPasswords(rows, ctx, TeacherImportRow::getUserNo);
         for (TeacherImportRow row : rows) {
             String userNo = row.getUserNo().trim();
             SysUser user = ctx.user(userNo);
@@ -307,14 +307,22 @@ public class ImportRowWriter {
      *
      * <p>BCrypt(strength 10) 单次约 60-100ms，万行单线程串行需 10+ 分钟，远超验收预算；
      * 哈希是纯 CPU 计算、无 DB 访问，在批内并行（commonPool，8 核机约 6-8x）后回落至分钟级。
-     * 仅对「文件中不存在的 user_no」真正用到，重复 user_no 由 merge 函数去重。</p>
+     * 重复 user_no 由 merge 函数去重。</p>
+     *
+     * <p><b>只为「本批将新建的账号」算</b>：已存在账号的密码不因导入而改变（见类注释），
+     * 对它们预哈希是纯浪费——重复导入一份全量名单（绝大多数行是已存在账号）此前要白付
+     * 一遍全量 BCrypt CPU。存在性判定走 {@link ImportRunContext#user(String)} 的缓存
+     * （已按批预取，命中不查库）。</p>
      */
-    private <T> Map<String, String> hashInitialPasswords(List<T> rows,
-                                                         java.util.function.Function<T, String> userNoOf) {
-        return rows.parallelStream().collect(java.util.stream.Collectors.toConcurrentMap(
-                row -> userNoOf.apply(row).trim(),
-                row -> passwordEncoder.encode(UserService.initialPassword(userNoOf.apply(row).trim())),
-                (existing, ignored) -> existing));
+    private <T> Map<String, String> hashInitialPasswords(List<T> rows, ImportRunContext ctx,
+                                                        java.util.function.Function<T, String> userNoOf) {
+        return rows.parallelStream()
+                .map(row -> userNoOf.apply(row).trim())
+                .distinct()
+                .filter(userNo -> ctx.user(userNo) == null)
+                .collect(java.util.stream.Collectors.toConcurrentMap(
+                        userNo -> userNo,
+                        userNo -> passwordEncoder.encode(UserService.initialPassword(userNo))));
     }
 
     private void bindRole(Long userId, Long roleId) {

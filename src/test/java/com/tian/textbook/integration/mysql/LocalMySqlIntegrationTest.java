@@ -285,7 +285,8 @@ class LocalMySqlIntegrationTest {
                 "db/migration-2026-09-23-role-permission.sql",
                 "db/migration-2026-09-23-order-withdraw.sql",
                 "db/migration-2026-09-23-notify.sql",
-                "db/migration-2026-09-23-reserve.sql");
+                "db/migration-2026-09-23-reserve.sql",
+                "db/migration-2026-09-23-perf.sql");
         // 连跑两轮：存储过程外壳的 information_schema 幂等判断生效（第二轮全部跳过）
         for (int round = 1; round <= 2; round++) {
             for (String script : scripts) {
@@ -305,6 +306,9 @@ class LocalMySqlIntegrationTest {
             assertThat(indexExists(connection, "notice_record_history", "uk_history_record")).isTrue();
             // BE-7a：change_request.change_type
             assertThat(columnExists(connection, "change_request", "change_type")).isTrue();
+            // B-G2②：审计时间索引（① 经实测未采纳，见迁移脚本内说明）
+            assertThat(indexExists(connection, "audit_log", "idx_audit_at")).isTrue();
+            assertThat(indexExists(connection, "notice_record", "idx_notice_user")).isFalse();
             // BE-6：22 张表各 6 个 reserve 列
             for (String table : RESERVE_TABLES) {
                 assertThat(countWhere(statement, "information_schema.COLUMNS",
@@ -313,6 +317,21 @@ class LocalMySqlIntegrationTest {
                         .as("%s 应有 6 个 reserve 列", table)
                         .isEqualTo(6);
             }
+        }
+    }
+
+    @Test
+    @DisplayName("真实 MySQL：性能索引迁移能补齐被删掉的索引（模拟存量库升级，B-G2 ①②）")
+    void perfIndexMigration_restoresDroppedIndexes() throws Exception {
+        try (Connection connection = verifyConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE audit_log DROP INDEX idx_audit_at");
+            assertThat(indexExists(connection, "audit_log", "idx_audit_at")).isFalse();
+        }
+        applyScript("db/migration-2026-09-23-perf.sql");
+        // 再跑一次验证幂等（存在即跳过，不会 Duplicate key name）
+        applyScript("db/migration-2026-09-23-perf.sql");
+        try (Connection connection = verifyConnection()) {
+            assertThat(indexExists(connection, "audit_log", "idx_audit_at")).isTrue();
         }
     }
 

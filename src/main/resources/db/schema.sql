@@ -390,5 +390,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
   reserve1 VARCHAR(255) DEFAULT NULL, reserve2 VARCHAR(255) DEFAULT NULL, reserve3 VARCHAR(255) DEFAULT NULL,
   reserve4 VARCHAR(255) DEFAULT NULL, reserve5 VARCHAR(255) DEFAULT NULL, reserve6 VARCHAR(255) DEFAULT NULL,
   PRIMARY KEY (id), KEY idx_audit_user (user_id, at), KEY idx_audit_action (action, at),
-  KEY idx_audit_resource (resource, resource_id, at) COMMENT '窗口变更记录查询（selectByResource）'
+  KEY idx_audit_resource (resource, resource_id, at) COMMENT '窗口变更记录查询（selectByResource）',
+  KEY idx_audit_at (at) COMMENT '只按时间范围筛审计（B-G2②：无前导列时避免全表扫 + filesort）'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='审计日志（只写不改；不含密码/token）';

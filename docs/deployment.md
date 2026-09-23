@@ -61,6 +61,7 @@ mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-role
 mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-order-withdraw.sql
 mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-notify.sql
 mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-reserve.sql
+mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-perf.sql    # 审计时间索引（B-G2②）
 ```
 
 | 2026-09-23 脚本 | 内容 | 不做会怎样 |
@@ -69,6 +70,7 @@ mysql -uroot -p textbook_order < src/main/resources/db/migration-2026-09-23-rese
 | `migration-2026-09-23-order-withdraw.sql` | `order_form.withdrawn_at` | 教师「撤回修改」500（Unknown column） |
 | `migration-2026-09-23-notify.sql` | `notice_record.semester_id`（含回填）+ `idx_record_semester` + `notice_record_history` 表 + `send_status` 加宽到 24 + `change_request.change_type` | 学期归档迁移无判定列；入口确认 500（`confirmed_by_entry` 18 字符放不进 VARCHAR(16)）；异动类型导入/筛选 500 |
 | `migration-2026-09-23-reserve.sql` | 22 张表补 `reserve1~6` | 结构漂移（新装库有、存量库无），后续按预留列做的扩展在旧库失败 |
+| `migration-2026-09-23-perf.sql` | `audit_log` 加 `idx_audit_at (at)` | 只按时间范围筛审计退化为全表扫 + filesort（实测 71 ms → 0.5 ms，见 `docs/性能验证-B-G2-20260923.md`）。纯加索引，向后兼容，可低峰执行 |
 
 > 幂等：四个脚本均先查 `information_schema` 再 ALTER（`role-permission` 用 `ON DUPLICATE KEY UPDATE`），可重复执行；
 > 真库验证见 `LocalMySqlIntegrationTest#migrationScripts20260923_areIdempotentAndComplete`（连跑两轮 + 对象齐备断言）。

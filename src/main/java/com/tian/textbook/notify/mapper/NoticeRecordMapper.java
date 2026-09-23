@@ -103,4 +103,31 @@ public interface NoticeRecordMapper extends BaseMapper<NoticeRecord> {
 
     /** 与 {@link #selectTaskSummaryRows} 同口径的 COUNT（导出阈值判定用，避免物化全量结果）。 */
     long countTaskSummaryRows(@Param("taskId") Long taskId, @Param("semesterId") Long semesterId);
+
+    /**
+     * 看板「未确认通知数」：本学期 active 任务的**未确认目标用户数**（按用户去重）。
+     *
+     * <p>此前由 {@code NotifyService#countUnconfirmedTargetUsers} 在内存里算——把目标任务角色
+     * 的**全部用户**与全部在册 profile 拉进 JVM 做集合差，成本 O(全部用户)（3-4 万行、多轮查询）。
+     * 现下沉为单条聚合 SQL：目标用户 = 任务角色 ∩ 该学期在册 ∩ 账号正常，减去已确认者。</p>
+     *
+     * <p>口径与内存版逐条对齐：{@code uk_task_active} 保证同学期至多 1 个 active 任务，
+     * 故「任务 × 角色」的匹配只需按该任务的角色码过滤即可（不存在跨任务串角色的问题）。</p>
+     *
+     * @param roleCodes 目标角色码（调用方从 active 任务的 target_roles 解析去重）
+     */
+    @Select("<script>"
+            + "SELECT COUNT(DISTINCT u.id) FROM notice_task t "
+            + "JOIN sys_role r ON r.deleted = 0 AND r.role_code IN "
+            + "<foreach collection='roleCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach> "
+            + "JOIN sys_user_role ur ON ur.role_id = r.id AND ur.deleted = 0 "
+            + "JOIN sys_user u ON u.id = ur.user_id AND u.deleted = 0 AND u.status = 1 "
+            + "JOIN user_semester_profile p ON p.user_id = u.id AND p.semester_id = t.semester_id "
+            + "     AND p.deleted = 0 AND p.status = 1 "
+            + "WHERE t.semester_id = #{semesterId} AND t.status = 'active' AND t.deleted = 0 "
+            + "AND NOT EXISTS (SELECT 1 FROM notice_record nr WHERE nr.task_id = t.id AND nr.user_id = u.id "
+            + "     AND nr.confirmed_at IS NOT NULL AND nr.deleted = 0)"
+            + "</script>")
+    long countUnconfirmedTargetUsers(@Param("semesterId") Long semesterId,
+                                     @Param("roleCodes") java.util.Collection<String> roleCodes);
 }
