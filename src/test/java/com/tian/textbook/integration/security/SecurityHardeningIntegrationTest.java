@@ -115,6 +115,31 @@ class SecurityHardeningIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
+    @DisplayName("F3/B-D13：内部用户 A 查 B 的导出任务 → 404（含下载），ADMIN 例外")
+    void internalUser_cannotReadOthersExportTask() {
+        // B 的任务（由 ADMIN 账号创建）
+        SysUser admin = seeder.user("ADM", "超管", "13800000003", null, null, 1, 0, 1, "ADMIN");
+        SysUser teacher = seeder.user("T900", "教师", "13800000004", null, null, 1, 0, 1, "TEACHER");
+        ExportTask others = seedExportTask("order", admin.getId());
+
+        // A（教师，非 ADMIN）按 id 直取 → 统一 404（403/404 差异可被用来枚举任务是否存在）
+        TestSecurity.authenticate(teacher.getId(), "T900", "教师", Set.of("TEACHER"), "TEACHER",
+                seeder.permissionsOf("TEACHER"));
+        assertThatThrownBy(() -> exportService.getTaskForUser(others.getId()))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(((BizException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+        // 即便拿到 id + token 也不能下载他人文件
+        assertThatThrownBy(() -> exportService.claimDownloadForUser(others.getId(), "seed-token-order"))
+                .isInstanceOf(BizException.class)
+                .satisfies(e -> assertThat(((BizException) e).getErrorCode()).isEqualTo(ErrorCode.NOT_FOUND));
+
+        // ADMIN 例外：可读（排障可见性），非业务可达
+        TestSecurity.authenticate(admin.getId(), "ADM", "超管", Set.of("ADMIN"), "ADMIN",
+                seeder.permissionsOf("ADMIN"));
+        assertThat(exportService.getTaskForUser(others.getId()).getId()).isEqualTo(others.getId());
+    }
+
+    @Test
     @DisplayName("F3：filePath 不下发前端；downloadToken 保留（异步下载链路依赖轮询响应取 token）")
     void exportTask_hidesFilePathButKeepsToken() throws Exception {
         ExportTask task = seedExportTask("supplier", 1L);
